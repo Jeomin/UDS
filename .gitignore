@@ -1,0 +1,23 @@
+# 大型模型文件
+*.h5
+
+# SWMM输出文件
+*.out
+*.rpt
+*.inp
+
+# Python缓存
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# 虚拟环境
+venv/
+env/
+
+# 数据文件
+*.npy
+
+# 结果文件
+*.pdf
