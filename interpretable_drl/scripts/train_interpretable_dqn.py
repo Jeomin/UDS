@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-训练解释性 DQN 代理
+训练解释性 DQN agent
 """
 import os
 import sys
@@ -36,7 +36,7 @@ def parse_args():
     Returns:
         args: 解析后的参数
     """
-    parser = argparse.ArgumentParser(description='训练解释性 DQN 代理')
+    parser = argparse.ArgumentParser(description='训练解释性 DQN agent')
     
     # 模型参数
     parser.add_argument('--max-depth', type=int, default=4,
@@ -119,14 +119,14 @@ def setup_environment(env_name):
 
 def setup_agent(env, args):
     """
-    设置 DQN 代理
+    设置 DQN agent
     
     Args:
         env: SWMM 环境
         args: 命令行参数
         
     Returns:
-        agent: DQN 代理
+        agent: DQN agent
         tree_model: 树模型
         explainer: 解释器
     """
@@ -150,7 +150,7 @@ def setup_agent(env, args):
         'ep_decay': 0.1
     }
     
-    # 创建 DQN 代理
+    # 创建 DQN agent
     agent = DQN(agent_params, env)
     
     # 如果提供了模型路径，加载预训练模型
@@ -184,7 +184,7 @@ def setup_agent(env, args):
         temperature=args.temperature
     )
     
-    # 创建树代理模型
+    # 创建树agent模型
     tree_model = TreeSurrogateModel(
         state_names=state_names,
         max_depth=args.max_depth
@@ -201,7 +201,7 @@ def collect_data_for_surrogate(agent, env, rainfall_data, num_samples=10):
     收集用于训练替代模型的数据
     
     Args:
-        agent: DQN 代理
+        agent: DQN agent
         env: SWMM 环境
         rainfall_data: 降雨数据
         num_samples: 收集的样本数量
@@ -219,7 +219,7 @@ def collect_data_for_surrogate(agent, env, rainfall_data, num_samples=10):
         done = False
         
         while not done:
-            # 使用代理选择动作
+            # 使用agent选择动作
             a = agent.choose_action(s, False)
             
             # 转换动作索引为泵状态
@@ -245,7 +245,7 @@ def train_surrogate_models(agent, env, dataset, soft_tree, tree_model, args, out
     训练替代模型
     
     Args:
-        agent: DQN 代理
+        agent: DQN agent
         env: SWMM 环境
         dataset: 数据集
         soft_tree: 软决策树
@@ -269,7 +269,7 @@ def train_surrogate_models(agent, env, dataset, soft_tree, tree_model, args, out
     soft_tree.save(os.path.join(output_dir, 'soft_tree.pkl'))
     
     # 训练树模型
-    print("训练树代理模型...")
+    print("训练树agent模型...")
     tree_model.train(states, actions)
     
     # 保存树模型
@@ -288,7 +288,7 @@ def analyze_interpretability(agent, env, tree_model, dataset, output_dir):
     分析模型可解释性
     
     Args:
-        agent: DQN 代理
+        agent: DQN agent
         env: SWMM 环境
         tree_model: 树模型
         dataset: 数据集
@@ -408,7 +408,7 @@ def main():
     # 设置环境
     env = setup_environment(args.env_path)
     
-    # 设置代理和模型
+    # 设置agent和模型
     agent, tree_model, explainer, soft_tree = setup_agent(env, args)
     
     # 加载降雨数据

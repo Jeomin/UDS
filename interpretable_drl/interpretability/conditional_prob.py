@@ -123,7 +123,7 @@ class ConditionalProbabilityAnalysis:
         基于树模型创建叶节点条件
         
         Args:
-            tree_model: 树形代理模型
+            tree_model: 树形agent模型
             
         Returns:
             leaf_conditions: 叶节点条件函数字典
@@ -212,7 +212,7 @@ class ConditionalProbabilityAnalysis:
         分析树模型叶节点的条件概率
         
         Args:
-            tree_model: 树形代理模型
+            tree_model: 树形agent模型
             dataset: 包含(状态, 动作, 结果)元组的数据集
             
         Returns:
@@ -236,7 +236,7 @@ class ConditionalProbabilityAnalysis:
         计算叶节点控制有效性
         
         Args:
-            tree_model: 树形代理模型
+            tree_model: 树形agent模型
             dataset: 包含(状态, 动作, 结果)元组的数据集
             
         Returns:
@@ -382,7 +382,7 @@ class ConditionalProbabilityAnalysis:
         可视化叶节点有效性
         
         Args:
-            tree_model: 树形代理模型
+            tree_model: 树形agent模型
             effectiveness: 叶节点有效性字典
             figsize: 图表大小
             
@@ -439,7 +439,7 @@ class ConditionalProbabilityAnalysis:
         创建叶节点有效性报告
         
         Args:
-            tree_model: 树形代理模型
+            tree_model: 树形agent模型
             effectiveness: 叶节点有效性字典
             state_names: 状态变量名称列表
             

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-解释器模块，用于生成控制行为的解释
+解释器生成控制行为的解释
 """
 import numpy as np
 from datetime import datetime
@@ -22,7 +22,7 @@ class Explainer:
         self.state_names = state_names
         self.action_names = action_names
         
-        # 设置默认的特征名称
+        # 默认的特征名称
         self.feature_names = {
             0: "CC-storage水位",
             1: "JK-storage水位",
@@ -43,17 +43,15 @@ class Explainer:
             16: "WSC流量",
             17: "降雨强度"
         }
-        
-        # 如果提供了状态名称，更新特征名称
+
         if state_names:
             for i, name in enumerate(state_names):
                 if i < len(self.feature_names):
                     self.feature_names[i] = name
         
-        # 设置泵名称
         self.pump_names = [
-            "CC-S1", "CC-S2", "JK-S",  # 污水泵
-            "CC-R1", "CC-R2", "JK-R1", "JK-R2"  # 雨水泵
+            "CC-S1", "CC-S2", "JK-S",
+            "CC-R1", "CC-R2", "JK-R1", "JK-R2"
         ]
         
         # 场景模板
@@ -315,12 +313,10 @@ class Explainer:
             
         try:
             if isinstance(action, (int, np.integer)):
-                # 假设action是0-127之间的整数，表示128种可能的泵组合
-                binary = format(action, '07b')  # 转换为7位二进制
+                binary = format(action, '07b')
                 pump_status = [int(bit) for bit in binary]
                 return pump_status
             elif isinstance(action, np.ndarray) and action.size == 7:
-                # 如果是包含7个元素的数组
                 return action.tolist()
             else:
                 # 默认所有泵关闭

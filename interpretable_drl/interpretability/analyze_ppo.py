@@ -6,7 +6,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import datetime
-import SWMM_ENV
+import environment.SWMM_ENV as SWMM_ENV
 import agents.PPO as PPO
 from interpretability.explainer import Explainer
 from interpretability.tree_surrogate import TreeSurrogateModel
@@ -66,7 +66,6 @@ def analyze_ppo(args):
     # 加载预训练模型
     if args.model_path:
         try:
-            # PPO 需要分别加载 actor 和 critic 网络
             actor_path = os.path.join(os.path.dirname(args.model_path), 'PPOactor.h5')
             critic_path = os.path.join(os.path.dirname(args.model_path), 'PPOcritic.h5')
             
@@ -92,7 +91,7 @@ def analyze_ppo(args):
             state_names.append(f"状态_{len(state_names)}")
     
     # 加载降雨数据
-    rain_path = 'PPO/test_raindata.npy'
+    rain_path = 'test_raindata.npy'
     try:
         rainfall_data = np.load(rain_path, allow_pickle=True).tolist()
         print(f"成功加载降雨数据: {len(rainfall_data)} 个样本")
@@ -109,7 +108,7 @@ def analyze_ppo(args):
         done = False
         states = []
         actions = []
-        logits = []  # PPO 输出策略分布
+        logits = []
         rewards = []
         floodings = []
         csos = []
@@ -147,8 +146,7 @@ def analyze_ppo(args):
         fig.savefig(os.path.join(output_dir, f'test_{i+1}_history.png'))
         plt.close(fig)
     
-    # 训练树模型
-    print("训练树代理模型...")
+    print("训练树agent模型...")
     tree_model = TreeSurrogateModel(
         state_names=state_names,
         max_depth=args.tree_depth
@@ -158,7 +156,6 @@ def analyze_ppo(args):
     states = np.array([item[0] for item in dataset])
     actions = np.array([item[1] for item in dataset])
     
-    # 训练树模型
     tree_model.train(states, actions)
     
     # 保存树模型
@@ -185,7 +182,7 @@ def analyze_ppo(args):
     
     # 执行敏感性分析
     try:
-        # 对于 PPO，我们分析每个泵的敏感性
+        # 对于 PPO，分析每个泵的敏感性
         I1 = 0
         for pump_idx in range(len(env.config['action_assets'])):
             print(f"分析泵 {pump_idx + 1}/{len(env.config['action_assets'])}")

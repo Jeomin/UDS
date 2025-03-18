@@ -17,7 +17,7 @@ from .visualization import (
 __all__ = [
     'plot_control_history',         # 绘制控制历史
     'plot_explanations',            # 绘制解释结果
-    'plot_tree_surrogate_model',    # 绘制树形代理模型
+    'plot_tree_surrogate_model',    # 绘制树形agent模型
     'plot_feature_importance',      # 绘制特征重要性
     'plot_sensitivity_heatmap',     # 绘制敏感性热力图
     'plot_conditional_probability', # 绘制条件概率分布

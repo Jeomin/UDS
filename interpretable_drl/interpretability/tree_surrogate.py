@@ -1,81 +1,65 @@
 # -*- coding: utf-8 -*-
 """
-树形代理模型，用于解释DRL代理的决策逻辑
+树形替代模型，用于分析DRLagent的决策行为
 基于论文: "Improving the interpretability of deep reinforcement learning in urban
 drainage system operation"
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.tree import export_graphviz, plot_tree, export_text
-import pickle
 import os
+import pickle
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.preprocessing import LabelEncoder
+import math
 
 class TreeSurrogateModel:
     """
-    使用决策树作为DRL代理的代理模型，提供可解释性
+    树形替代模型，用于近似和解释DRLagent的决策
     """
     
-    def __init__(self, state_names=None, action_names=None, max_depth=5, min_samples_leaf=10):
+    def __init__(self, state_names=None, max_depth=4):
         """
-        初始化树形代理模型
+        初始化树形替代模型
         
         Args:
             state_names: 状态变量名称列表
-            action_names: 动作名称列表
             max_depth: 决策树最大深度
-            min_samples_leaf: 每个叶节点的最小样本数
         """
         self.state_names = state_names
-        self.action_names = action_names
         self.max_depth = max_depth
-        self.min_samples_leaf = min_samples_leaf
         self.model = None
-        self.is_classifier = False
-    
+        self.label_encoder = LabelEncoder()
+        
     def train(self, states, actions):
         """
-        训练树形代理模型
+        训练树形替代模型
         
         Args:
             states: 状态数据
             actions: 动作数据
             
         Returns:
-            self: 模型实例
+            self: 训练后的模型
         """
-        # 确保数据格式正确
-        states = np.array(states)
-        actions = np.array(actions)
-        
-        # 确定是分类问题还是回归问题
-        if len(actions.shape) == 1:
-            # 检查是否为分类变量
-            unique_values = np.unique(actions)
-            if len(unique_values) < 20 or all(isinstance(val, (int, np.integer)) for val in unique_values):
-                # 如果唯一值少于20或都是整数，认为是分类问题
-                self.model = DecisionTreeClassifier(
-                    max_depth=self.max_depth,
-                    min_samples_leaf=self.min_samples_leaf
-                )
-                self.is_classifier = True
-            else:
-                # 否则是回归问题
-                self.model = DecisionTreeRegressor(
-                    max_depth=self.max_depth,
-                    min_samples_leaf=self.min_samples_leaf
-                )
-                self.is_classifier = False
+        # 处理动作数据
+        if isinstance(actions[0], (list, np.ndarray)):
+            # 如果动作是数组（如PPO的泵状态），将其转换为字符串表示
+            action_strs = []
+            for action in actions:
+                action_strs.append(str(list(action)))
+                
+            # 编码动作
+            y = self.label_encoder.fit_transform(action_strs)
         else:
-            # 多维输出，使用回归树
-            self.model = DecisionTreeRegressor(
-                max_depth=self.max_depth,
-                min_samples_leaf=self.min_samples_leaf
-            )
-            self.is_classifier = False
+            # 如果动作是标量（如DQN的动作索引），直接使用
+            y = actions
+            
+        self.model = DecisionTreeClassifier(
+            max_depth=self.max_depth,
+            random_state=42
+        )
         
-        # 训练模型
-        self.model.fit(states, actions)
+        self.model.fit(states, y)
         
         return self
     
@@ -84,108 +68,129 @@ class TreeSurrogateModel:
         预测动作
         
         Args:
-            state: 状态
+            state: 输入状态
             
         Returns:
             action: 预测的动作
         """
-        if self.model is None:
+        if not self.model:
             raise ValueError("模型尚未训练")
             
-        # 确保状态格式正确
-        if isinstance(state, list):
-            state = np.array(state)
-        
-        if len(state.shape) == 1:
-            state = state.reshape(1, -1)
+        if len(np.array(state).shape) == 1:
+            state = np.array([state])
             
-        return self.model.predict(state)[0]
-    
-    def predict_with_path(self, state):
-        """
-        预测动作并返回决策路径
+        y_pred = self.model.predict(state)
         
-        Args:
-            state: 状态
-            
-        Returns:
-            decision_path: 决策路径（节点编号列表）
-            action: 预测的动作
-        """
-        if self.model is None:
-            raise ValueError("模型尚未训练")
-            
-        # 确保状态格式正确
-        if isinstance(state, list):
-            state = np.array(state)
-        
-        if len(state.shape) == 1:
-            state = state.reshape(1, -1)
-        
-        # 获取叶节点编号
-        leaf_id = self.model.apply(state)[0]
-        
-        # 获取决策路径
-        decision_path = self.model.decision_path(state)
-        path_indices = decision_path.indices[decision_path.indptr[0]:decision_path.indptr[1]]
-        
-        # 预测动作
-        action = self.model.predict(state)[0]
-        
-        return path_indices.tolist(), action
-    
-    def get_feature_importance(self):
-        """
-        获取特征重要性
-        
-        Returns:
-            importance: 特征重要性字典
-        """
-        if self.model is None:
-            raise ValueError("模型尚未训练")
-            
-        feature_importance = self.model.feature_importances_
-        
-        # 创建特征名称
-        if self.state_names:
-            feature_names = self.state_names
+        if hasattr(self, 'label_encoder') and self.label_encoder.classes_.size > 0:
+            try:
+                # 将预测结果转换回原始动作表示
+                action_str = self.label_encoder.inverse_transform(y_pred)[0]
+                return eval(action_str)
+            except:
+                # 如果解码失败，返回原始预测
+                return y_pred[0]
         else:
-            feature_names = [f"特征_{i}" for i in range(len(feature_importance))]
-            
-        # 创建重要性字典
-        importance = dict(zip(feature_names, feature_importance))
-        
-        # 按重要性排序
-        importance = dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
-        
-        return importance
+            return y_pred[0]
     
-    def visualize(self, output_file=None, feature_names=None, class_names=None, figsize=(15, 10)):
+    def get_decision_rules(self):
+        """
+        获取决策规则
+        
+        Returns:
+            rules: 决策规则列表
+        """
+        if not self.model:
+            raise ValueError("模型尚未训练")
+            
+        # 获取树结构
+        tree = self.model.tree_
+        
+        # 特征名称
+        feature_names = self.state_names if self.state_names else [f"特征_{i}" for i in range(tree.n_features)]
+        
+        # 类别名称
+        if hasattr(self, 'label_encoder') and self.label_encoder.classes_.size > 0:
+            try:
+                class_names = self.label_encoder.classes_
+            except:
+                class_names = [f"类别_{i}" for i in range(tree.n_classes[0])]
+        else:
+            class_names = [f"类别_{i}" for i in range(tree.n_classes[0])]
+        
+        # 递归提取规则
+        def extract_rules(node_id, prefix=""):
+            if tree.children_left[node_id] == tree.children_right[node_id]:  # 叶节点
+                # 获取该叶节点的主要类别
+                class_id = np.argmax(tree.value[node_id])
+                if class_id < len(class_names):
+                    rule = f"{prefix}那么 {class_names[class_id]}"
+                else:
+                    rule = f"{prefix}那么 类别_{class_id}"
+                return [rule]
+                
+            # 获取分裂特征和阈值
+            feature = tree.feature[node_id]
+            threshold = tree.threshold[node_id]
+            
+            # 构建规则
+            if feature < len(feature_names):
+                feature_name = feature_names[feature]
+            else:
+                feature_name = f"特征_{feature}"
+                
+            # 左分支规则（<= threshold）
+            left_prefix = prefix
+            if left_prefix:
+                left_prefix += " 和 "
+            left_prefix += f"{feature_name} <= {threshold:.4f}"
+            if not left_prefix.startswith("如果 "):
+                left_prefix = "如果 " + left_prefix
+                
+            # 右分支规则（> threshold）
+            right_prefix = prefix
+            if right_prefix:
+                right_prefix += " 和 "
+            right_prefix += f"{feature_name} > {threshold:.4f}"
+            if not right_prefix.startswith("如果 "):
+                right_prefix = "如果 " + right_prefix
+                
+            # 递归处理子节点
+            left_rules = extract_rules(tree.children_left[node_id], left_prefix)
+            right_rules = extract_rules(tree.children_right[node_id], right_prefix)
+            
+            return left_rules + right_rules
+            
+        rules = extract_rules(0)
+        return rules
+    
+    def visualize(self, feature_names=None, class_names=None, figsize=(12, 8)):
         """
         可视化决策树
         
         Args:
-            output_file: 输出文件路径
-            feature_names: 特征名称
-            class_names: 类别名称
+            feature_names: 特征名称列表
+            class_names: 类别名称列表
             figsize: 图表大小
             
         Returns:
             fig: 图表对象
         """
-        if self.model is None:
+        if not self.model:
             raise ValueError("模型尚未训练")
             
-        # 设置特征名称和类别名称
-        if feature_names is None:
-            feature_names = self.state_names if self.state_names else None
-            
-        if class_names is None and self.is_classifier:
-            class_names = self.action_names if self.action_names else None
-            
-        # 创建图表
         fig, ax = plt.subplots(figsize=figsize)
         
+        # 使用提供的特征名称或默认名称
+        if feature_names is None:
+            feature_names = self.state_names if self.state_names else [f"特征_{i}" for i in range(self.model.n_features_in_)]
+            
+        # 使用提供的类别名称或编码器的类别
+        if class_names is None and hasattr(self, 'label_encoder') and self.label_encoder.classes_.size > 0:
+            try:
+                class_names = self.label_encoder.classes_
+            except:
+                class_names = [f"类别_{i}" for i in range(self.model.n_classes_)]
+                
         # 绘制决策树
         plot_tree(
             self.model,
@@ -196,142 +201,79 @@ class TreeSurrogateModel:
             ax=ax
         )
         
-        # 保存图表
-        if output_file:
-            # 确保目录存在
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            fig.savefig(output_file, dpi=300, bbox_inches='tight')
-            
+        plt.title("决策树替代模型")
+        
         return fig
     
-    def get_text_representation(self, feature_names=None):
+    def get_leaf_gini(self):
         """
-        获取决策树的文本表示
-        
-        Args:
-            feature_names: 特征名称
-            
-        Returns:
-            text: 决策树的文本表示
-        """
-        if self.model is None:
-            raise ValueError("模型尚未训练")
-            
-        # 设置特征名称
-        if feature_names is None:
-            feature_names = self.state_names if self.state_names else None
-            
-        # 获取文本表示
-        return export_text(self.model, feature_names=feature_names)
-    
-    def get_decision_rules(self):
-        """
-        获取决策规则
+        获取叶节点的Gini不纯度
         
         Returns:
-            rules: 决策规则列表
+            leaf_gini: 叶节点Gini不纯度字典
         """
-        if self.model is None:
+        if not self.model:
             raise ValueError("模型尚未训练")
             
-        # 获取树结构
         tree = self.model.tree_
+        leaf_gini = {}
         
-        # 特征名称
-        feature_names = self.state_names if self.state_names else [f"特征_{i}" for i in range(tree.n_features)]
-        
-        # 类别名称
-        if self.is_classifier:
-            if self.action_names:
-                class_names = self.action_names[:tree.n_classes[0]]
-            else:
-                class_names = [f"类别_{i}" for i in range(tree.n_classes[0])]
-        
-        # 递归提取决策规则
-        def extract_rules(node_id, depth, path):
-            # 如果是叶节点
-            if tree.children_left[node_id] == -1:
-                if self.is_classifier:
-                    # 分类器：返回类别概率
-                    class_prob = tree.value[node_id][0] / np.sum(tree.value[node_id][0])
-                    max_class = np.argmax(class_prob)
-                    rule = f"如果 {' 和 '.join(path)} 那么 {class_names[max_class]} (概率: {class_prob[max_class]:.2f})"
-                else:
-                    # 回归器：返回预测值
-                    rule = f"如果 {' 和 '.join(path)} 那么 值 = {tree.value[node_id][0][0]:.4f}"
-                return [rule]
-            
-            # 获取特征和阈值
-            feature = feature_names[tree.feature[node_id]]
-            threshold = tree.threshold[node_id]
-            
-            # 递归左右子树
-            left_path = path + [f"{feature} <= {threshold:.4f}"]
-            left_rules = extract_rules(tree.children_left[node_id], depth + 1, left_path)
-            
-            right_path = path + [f"{feature} > {threshold:.4f}"]
-            right_rules = extract_rules(tree.children_right[node_id], depth + 1, right_path)
-            
-            return left_rules + right_rules
-        
-        # 从根节点开始提取规则
-        rules = extract_rules(0, 0, [])
-        
-        return rules
-    
-    def calculate_gini_impurity(self):
-        """
-        计算决策树的Gini不纯度
-        
-        Returns:
-            gini_impurity: Gini不纯度
-        """
-        if self.model is None:
-            raise ValueError("模型尚未训练")
-            
-        # 获取树结构
-        tree = self.model.tree_
-        
-        # 计算每个叶节点的Gini不纯度
-        gini_values = []
-        n_samples = []
-        
+        # 查找叶节点
         for i in range(tree.node_count):
-            # 如果是叶节点
-            if tree.children_left[i] == -1:
-                if self.is_classifier:
-                    # 分类器：计算Gini不纯度
-                    probs = tree.value[i][0] / np.sum(tree.value[i][0])
-                    gini = 1 - np.sum(np.square(probs))
+            if tree.children_left[i] == tree.children_right[i]:  # 叶节点
+                # 计算Gini不纯度
+                values = tree.value[i][0]
+                total = np.sum(values)
+                if total > 0:
+                    gini = 1.0 - np.sum((values / total) ** 2)
                 else:
-                    # 回归器：使用方差作为不纯度（简化计算）
-                    gini = np.var(tree.value[i]) if len(tree.value[i].flatten()) > 1 else 0
+                    gini = 0.0
+                    
+                leaf_gini[i] = gini
                 
-                gini_values.append(gini)
-                n_samples.append(tree.n_node_samples[i])
-        
-        # 计算加权平均Gini不纯度
-        if sum(n_samples) > 0:
-            weighted_gini = sum(g * n for g, n in zip(gini_values, n_samples)) / sum(n_samples)
-        else:
-            weighted_gini = 0
-            
-        return weighted_gini
+        return leaf_gini
     
     def calculate_interpretability_index(self):
         """
-        计算可解释性指数 I2
+        计算可解释性指数I2（基于Gini不纯度）
         
         Returns:
             I2: 可解释性指数
         """
-        # 计算Gini不纯度
-        gini = self.calculate_gini_impurity()
+        leaf_gini = self.get_leaf_gini()
         
-        # 计算I2指数（越接近1越好）
-        I2 = np.exp(-gini)
+        if not leaf_gini:
+            return 0.0
+            
+        # 计算I2 = exp(-平均Gini不纯度)
+        avg_gini = np.mean(list(leaf_gini.values()))
+        I2 = math.exp(-avg_gini)
         
-        return I2
+        return min(1.0, I2)  # 确保I2不超过1
+    
+    def get_feature_importance(self):
+        """
+        获取特征重要性
+        
+        Returns:
+            importance: 特征重要性字典
+        """
+        if not self.model:
+            raise ValueError("模型尚未训练")
+            
+        importance = {}
+        
+        # 特征名称
+        feature_names = self.state_names if self.state_names else [f"特征_{i}" for i in range(self.model.n_features_in_)]
+        
+        # 特征重要性
+        for i, imp in enumerate(self.model.feature_importances_):
+            if i < len(feature_names):
+                importance[feature_names[i]] = imp
+            else:
+                importance[f"特征_{i}"] = imp
+                
+        return importance
     
     def save(self, filepath):
         """
@@ -340,24 +282,18 @@ class TreeSurrogateModel:
         Args:
             filepath: 文件路径
         """
-        if self.model is None:
-            raise ValueError("模型尚未训练")
-            
         # 确保目录存在
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
-        # 保存模型和元数据
-        data = {
+        model_data = {
             'model': self.model,
             'state_names': self.state_names,
-            'action_names': self.action_names,
             'max_depth': self.max_depth,
-            'min_samples_leaf': self.min_samples_leaf,
-            'is_classifier': self.is_classifier
+            'label_encoder': self.label_encoder
         }
         
         with open(filepath, 'wb') as f:
-            pickle.dump(data, f)
+            pickle.dump(model_data, f)
     
     def load(self, filepath):
         """
@@ -367,13 +303,9 @@ class TreeSurrogateModel:
             filepath: 文件路径
         """
         with open(filepath, 'rb') as f:
-            data = pickle.load(f)
-        
-        self.model = data['model']
-        self.state_names = data['state_names']
-        self.action_names = data['action_names']
-        self.max_depth = data['max_depth']
-        self.min_samples_leaf = data['min_samples_leaf']
-        self.is_classifier = data['is_classifier']
-        
-        return self
+            model_data = pickle.load(f)
+            
+        self.model = model_data['model']
+        self.state_names = model_data['state_names']
+        self.max_depth = model_data['max_depth']
+        self.label_encoder = model_data['label_encoder']

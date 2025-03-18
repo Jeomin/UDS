@@ -8,10 +8,10 @@ class BaseAgent(ABC):
     
     def __init__(self, params, env):
         """
-        初始化代理
+        初始化agent
         
         Args:
-            params (dict): 代理参数
+            params (dict): agent参数
             env: 环境对象
         """
         self.params = params
@@ -34,7 +34,7 @@ class BaseAgent(ABC):
     @abstractmethod
     def train(self, rainfall_data):
         """
-        训练代理
+        训练agent
         
         Args:
             rainfall_data: 训练用降雨数据
@@ -54,7 +54,7 @@ class BaseAgent(ABC):
     @abstractmethod
     def test(self, rainfall):
         """
-        测试代理
+        测试agent
         
         Args:
             rainfall: 测试用降雨数据

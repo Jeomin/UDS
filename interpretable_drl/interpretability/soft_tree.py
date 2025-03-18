@@ -49,12 +49,12 @@ class SoftDecisionTree:
         
     def _build_model(self):
         """
-        构建TensorFlow软决策树模型
+        构建软决策树模型
         
         Returns:
             model: Keras模型
         """
-        inputs = layers.Input(shape=(self.input_dim,))
+        inputs = tf.keras.layers.Input(shape=(self.input_dim,))
         
         # 构建决策树结构
         leaf_outputs = []
@@ -67,40 +67,52 @@ class SoftDecisionTree:
             # 如果是叶节点
             if node_depth == self.depth - 1:
                 leaf_id = node_id - (2**(node_depth) - 1)
-                leaf_weight = tf.constant(self.leaf_weights[leaf_id], dtype=tf.float32)
-                leaf_output = tf.reshape(path_prob, [-1, 1]) * leaf_weight
-                leaf_outputs.append(leaf_output)
+                # 确保leaf_id在有效范围内
+                if leaf_id < len(self.leaf_weights):
+                    leaf_weight = tf.constant(self.leaf_weights[leaf_id], dtype=tf.float32)
+                    # TODO 确保维度匹配
+                    if len(leaf_weight.shape) == 1:
+                        leaf_weight = tf.reshape(leaf_weight, [1, -1])
+                    leaf_output = path_prob * leaf_weight
+                    leaf_outputs.append(leaf_output)
             else:
                 # 计算决策概率
-                split_weight = tf.constant(self.split_weights[node_id], dtype=tf.float32)
-                split_threshold = tf.constant(self.split_thresholds[node_id], dtype=tf.float32)
-                
-                weighted_sum = tf.reduce_sum(inputs * split_weight, axis=1, keepdims=True)
-                decision_prob = tf.sigmoid((weighted_sum - split_threshold) / self.temperature)
-                
-                # 左子节点（概率为1-决策概率）
-                left_path_prob = path_prob * (1 - decision_prob)
-                left_node_id = 2 * node_id + 1
-                left_node_depth = node_depth + 1
-                node_queue.append((left_node_id, left_node_depth, left_path_prob))
-                
-                # 右子节点（概率为决策概率）
-                right_path_prob = path_prob * decision_prob
-                right_node_id = 2 * node_id + 2
-                right_node_depth = node_depth + 1
-                node_queue.append((right_node_id, right_node_depth, right_path_prob))
+                if node_id < len(self.split_weights):
+                    split_weight = tf.constant(self.split_weights[node_id], dtype=tf.float32)
+                    split_threshold = tf.constant(self.split_thresholds[node_id][0], dtype=tf.float32)
+                    
+                    if len(split_weight.shape) == 1:
+                        split_weight = tf.reshape(split_weight, [1, -1])
+                    
+                    weighted_sum = tf.reduce_sum(inputs * split_weight, axis=1, keepdims=True)
+                    decision_prob = tf.sigmoid((weighted_sum - split_threshold) / self.temperature)
+                    
+                    # 左子节点（概率为1-决策概率）
+                    left_path_prob = path_prob * (1 - decision_prob)
+                    left_node_id = 2 * node_id + 1
+                    left_node_depth = node_depth + 1
+                    node_queue.append((left_node_id, left_node_depth, left_path_prob))
+                    
+                    # 右子节点（概率为决策概率）
+                    right_path_prob = path_prob * decision_prob
+                    right_node_id = 2 * node_id + 2
+                    right_node_depth = node_depth + 1
+                    node_queue.append((right_node_id, right_node_depth, right_path_prob))
         
         # 组合所有叶节点的输出
         if leaf_outputs:
             final_output = tf.add_n(leaf_outputs)
         else:
-            final_output = layers.Dense(self.output_dim)(inputs)  # 后备输出
+            # 后备输出
+            final_output = tf.keras.layers.Dense(self.output_dim)(inputs)
         
-        return models.Model(inputs=inputs, outputs=final_output)
+        model = tf.keras.models.Model(inputs=inputs, outputs=final_output)
+        
+        return model
     
     def complex_split(self, features, weights, threshold, temperature=1.0):
         """
-        复杂分裂函数，结合多个特征进行分裂决策
+        分裂函数，结合多个特征进行分裂决策
         
         Args:
             features: 输入特征
@@ -128,7 +140,6 @@ class SoftDecisionTree:
         if isinstance(state, list):
             state = np.array(state)
         
-        # 确保状态形状正确
         if len(state.shape) == 1:
             state = state.reshape(1, -1)
         
@@ -173,10 +184,10 @@ class SoftDecisionTree:
             
             # 确定下一个节点
             if decision_prob > 0.5:
-                # 向右走
+                # 向右
                 node_id = 2 * node_id + 2
             else:
-                # 向左走
+                # 向左
                 node_id = 2 * node_id + 1
                 
             path.append(node_id)
@@ -184,7 +195,7 @@ class SoftDecisionTree:
         # 计算叶节点编号
         leaf_id = node_id - (2**(len(path)-1) - 1)
         if leaf_id < 0 or leaf_id >= len(self.leaf_weights):
-            leaf_id = 0  # 默认值
+            leaf_id = 0  # default
         
         # 获取叶节点输出
         action = self.leaf_weights[leaf_id]
@@ -250,15 +261,13 @@ class SoftDecisionTree:
         """
         # 编译模型
         self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-            loss='mse'
+        optimizer='adam',
+        loss='mse'
         )
         
-        # 确保数据格式正确
         states = np.array(states)
         actions = np.array(actions)
         
-        # 训练模型
         history = self.model.fit(
             states, actions,
             epochs=epochs,
@@ -267,7 +276,7 @@ class SoftDecisionTree:
         )
         
         # 提取训练后的权重
-        # 这里需要根据实际模型结构进行调整
+        # TODO 根据实际模型结构进行调整
         
         return history.history
     
