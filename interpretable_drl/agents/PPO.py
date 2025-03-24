@@ -15,12 +15,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import random
+import os
 
 
 class PPO:
     
     def __init__(self,params,env):
-        tf.compat.v1.disable_eager_execution()
+        # tf.compat.v1.disable_eager_execution()
         self.params=params
         self.memory_buffer = deque(maxlen=1000)
         self.env=env
@@ -67,7 +68,7 @@ class PPO:
             if pa < self.params['epsilon']:
                 logits = self.actor.predict(np.array([state]))
             else:
-                logits = np.array([np.random.randint(2) for _ in range(self.params['action_dim'])])
+                logits = np.array([[np.random.randint(2) for _ in range(self.params['action_dim'])]])
         else:
             logits = self.actor.predict(np.array([state]))
         
@@ -178,9 +179,42 @@ class PPO:
         return history
         
         
-    def load_model(self):
-        self.critic.load_weights('./model/PPOcritic.h5')
-        self.actor.load_weights('./model/PPOactor.h5')
+    def save_model(self, save_dir):
+        """
+        保存模型权重到指定目录
+        
+        Args:
+            save_dir: 保存目录路径
+        """
+        os.makedirs(save_dir, exist_ok=True)
+        critic_path = os.path.join(save_dir, 'PPOcritic.h5')
+        actor_path = os.path.join(save_dir, 'PPOactor.h5')
+        
+        self.critic.save_weights(critic_path)
+        self.actor.save_weights(actor_path)
+        print(f"PPO模型已保存到 {save_dir}")
+        
+    def load_model(self, load_dir=None):
+        """
+        从指定目录加载模型权重
+        
+        Args:
+            load_dir: 加载目录路径，如果为None则使用默认路径
+        """
+        if load_dir is None:
+            # 使用默认路径
+            critic_path = './model/PPOcritic.h5'
+            actor_path = './model/PPOactor.h5'
+        else:
+            critic_path = os.path.join(load_dir, 'PPOcritic.h5')
+            actor_path = os.path.join(load_dir, 'PPOactor.h5')
+        
+        try:
+            self.critic.load_weights(critic_path)
+            self.actor.load_weights(actor_path)
+            print(f"PPO模型已加载自 {critic_path} 和 {actor_path}")
+        except Exception as e:
+            print(f"加载PPO模型失败: {e}")
         
     def test(self,rain):
         # simulation on given rainfall

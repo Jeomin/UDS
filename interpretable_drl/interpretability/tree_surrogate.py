@@ -17,16 +17,16 @@ class TreeSurrogateModel:
     树形替代模型，用于近似和解释DRLagent的决策
     """
     
-    def __init__(self, state_names=None, max_depth=4):
+    def __init__(self, state_names=None, tree_depth=4):
         """
         初始化树形替代模型
         
         Args:
             state_names: 状态变量名称列表
-            max_depth: 决策树最大深度
+            tree_depth: 决策树最大深度
         """
         self.state_names = state_names
-        self.max_depth = max_depth
+        self.tree_depth = tree_depth
         self.model = None
         self.label_encoder = LabelEncoder()
         
@@ -55,7 +55,7 @@ class TreeSurrogateModel:
             y = actions
             
         self.model = DecisionTreeClassifier(
-            max_depth=self.max_depth,
+            max_depth=self.tree_depth,
             random_state=42
         )
         
@@ -288,7 +288,7 @@ class TreeSurrogateModel:
         model_data = {
             'model': self.model,
             'state_names': self.state_names,
-            'max_depth': self.max_depth,
+            'tree_depth': self.tree_depth,
             'label_encoder': self.label_encoder
         }
         
@@ -307,5 +307,5 @@ class TreeSurrogateModel:
             
         self.model = model_data['model']
         self.state_names = model_data['state_names']
-        self.max_depth = model_data['max_depth']
+        self.tree_depth = model_data['tree_depth']
         self.label_encoder = model_data['label_encoder']

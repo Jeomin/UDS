@@ -348,7 +348,12 @@ class IntrinsicSoftTree:
             state = state.reshape(1, -1)
             
         try:
-            return self.model.predict(state, verbose=0)[0]
+            predictions = self.model.predict(state, verbose=0)
+            if len(predictions) > 0:
+                return predictions[0]
+            else:
+                # 如果预测失败，返回均匀分布
+                return np.ones(self.num_classes) / self.num_classes
         except Exception as e:
             print(f"预测错误: {e}")
             # 出错时返回均匀分布

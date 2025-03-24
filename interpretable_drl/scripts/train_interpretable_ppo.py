@@ -39,7 +39,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='训练解释性 PPO agent')
     
     # 模型参数
-    parser.add_argument('--max-depth', type=int, default=4,
+    parser.add_argument('--tree-depth', type=int, default=4,
                        help='树模型最大深度')
     
     parser.add_argument('--temperature', type=float, default=1.0,
@@ -192,14 +192,14 @@ def setup_agent(env, args):
     soft_tree = SoftDecisionTree(
         input_dim=len(env.config['states']),
         output_dim=agent_params['action_dim'],  # PPO直接输出每个泵的控制
-        depth=args.max_depth,
+        depth=args.tree_depth,
         temperature=args.temperature
     )
     
     # 创建树agent模型
     tree_model = TreeSurrogateModel(
         state_names=state_names,
-        max_depth=args.max_depth
+        tree_depth=args.tree_depth
     )
     
     # 创建解释器
@@ -411,12 +411,10 @@ def analyze_interpretability(agent, env, tree_model, dataset, output_dir):
     return I1, I2, I3
 
 
-def main():
+def train_interpretable_ppo(args):
     """
     主函数
     """
-    # 解析命令行参数
-    args = parse_args()
     
     # 设置随机种子
     np.random.seed(args.seed)
@@ -465,6 +463,6 @@ def main():
     print(f"训练和分析完成，输出保存在 {output_dir}")
     print(f"可解释性指数: I1={I1}, I2={I2}, I3={I3}")
 
-
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    train_interpretable_ppo(args)

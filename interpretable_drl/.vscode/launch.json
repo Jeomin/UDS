@@ -1,0 +1,40 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Intrinsic Train",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "intrinsic_train",
+                "--num-classes", "5",
+                "--tree-depth", "4",
+                "--temperature", "1.0",
+                "--epochs", "10",
+                "--num-train", "50",
+                "--agent-type", "ppo"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Debug PPO",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "train_ppo",
+                "--num-train", "5",
+                "--epochs", "2",
+                "--tree-depth", "4",
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "TF_CPP_MIN_LOG_LEVEL": "1"
+            }
+        },
+    ]
+}

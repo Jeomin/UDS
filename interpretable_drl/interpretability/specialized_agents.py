@@ -49,32 +49,27 @@ class SpecializedAgentManager:
             train_mode: 是否处于训练模式
             
         Returns:
-            action: 选择的动作
+            action: 选择的动作 (可能是直接动作或(logits, action)对)
             class_id: 选择的场景类别
         """
-        try:
-            # 找出概率最高的类别
-            class_id = np.argmax(embedding)
+        # 找出概率最高的类别
+        class_id = np.argmax(embedding)
+        
+        # 确保class_id在有效范围内
+        if class_id >= len(self.agents):
+            class_id = 0  # 使用默认agent
             
-            agent = self.agents[class_id]
-            
-            combined_state = np.concatenate([state, embedding])
-            
-            # 选择动作
-            result = agent.choose_action(combined_state, train_mode)
-            
-            # 处理不同类型的返回值
-            if isinstance(result, tuple) and len(result) >= 2:
-                action, other = result[0], result[1]
-            else:
-                action, other = result, None
-                
-            return action, class_id
-        except Exception as e:
-            print(f"选择动作出错: {e}")
-            # 返回随机动作作为备选
-            action = [np.random.randint(2) for _ in range(self.agents[0].params['action_dim'])]
-            return action, class_id
+        agent = self.agents[class_id]
+        
+        # 合并状态和embedding
+        combined_state = np.concatenate([state, embedding])
+        
+        # 根据agent类型选择动作
+        result = agent.choose_action(combined_state, train_mode)
+        
+        # 返回原始结果
+        return result, class_id
+
     
     def train_agents(self, dataset_by_class):
         """
@@ -91,44 +86,68 @@ class SpecializedAgentManager:
             if len(data) > 10:  # 确保有足够数据
                 print(f"训练场景 {class_id} 的agent，数据量: {len(data)}")
                 
-                # 提取训练数据
-                states = []
-                embeddings = []
-                actions = []
-                rewards = []
-                next_states = []
-                next_embeddings = []
-                dones = []
-                
-                for i, item in enumerate(data):
-                    state, embedding, action, reward, _, next_state, done = item if len(item) == 7 else (*item, None, None)
-                    states.append(state)
-                    embeddings.append(embedding)
-                    actions.append(action)
-                    rewards.append(reward)
-                    
-                    if next_state is not None:
-                        next_states.append(next_state)
-                        
-                        # 为下一状态生成嵌入
-                        if len(data) > i+1:
-                            next_embeddings.append(data[i+1][1])  # 下一个数据的嵌入
-                        else:
-                            next_embeddings.append(embedding)  # 使用当前嵌入
-                            
-                        dones.append(done)
-                
-                # 训练agent
+                # 获取agent
                 agent = self.agents[class_id]
-                loss = agent.train_on_batch(
-                    states, embeddings, actions, rewards, 
-                    next_states, next_embeddings, dones
-                )
                 
-                losses[class_id] = loss
-                print(f"  场景 {class_id} agent训练完成: 损失={loss:.4f}")
+                # 提取并准备训练数据
+                states, embeddings, actions, rewards, logits, next_states = self._prepare_training_data(data)
+                
+                if hasattr(agent, 'update') and all(lg is not None for lg in logits):
+                    # 合并状态和嵌入
+                    combined_states = np.array([np.concatenate([s, e]) for s, e in zip(states, embeddings)])
+                    
+                    # 计算折扣回报
+                    if len(next_states) > 0:
+                        dr = agent.discount_reward(combined_states, np.array(rewards), next_states[-1])
+                    else:
+                        rewards_array = np.array(rewards)
+                        dr = np.reshape(rewards_array, (rewards_array.size, 1))
+
+                    policy_loss, _ = agent.update(combined_states, np.array(logits), np.array(actions), dr)
+                    losses[class_id] = float(policy_loss) if policy_loss is not None else 0.0
+                    print(f"  场景 {class_id} agent训练完成: 损失={losses[class_id]:.4f}")
+                
+                elif hasattr(agent, 'train_on_batch'):
+                    try:
+                        loss = agent.train_on_batch(states, embeddings, actions, rewards, next_states)
+                        losses[class_id] = loss
+                        print(f"  场景 {class_id} agent训练完成: 损失={loss:.4f}")
+                    except Exception as e:
+                        print(f"  使用train_on_batch训练场景 {class_id} agent出错: {e}")
+                else:
+                    print(f"  场景 {class_id} agent没有可用的批次训练方法")
         
         return losses
+
+    def _prepare_training_data(self, data):
+        """准备训练数据"""
+        states = []
+        embeddings = []
+        actions = []
+        rewards = []
+        logits = []
+        next_states = []
+        
+        for item in data:
+            state, embedding, action, reward, _, next_state, _ = item if len(item) == 7 else (*item, None, None)
+            
+            states.append(state)
+            embeddings.append(embedding)
+            rewards.append(reward)
+
+            if isinstance(action, tuple) and len(action) == 2:
+                # (logits, action_values)
+                act_logits, act_values = action
+                logits.append(act_logits)
+                actions.append(act_values)
+            else:
+                logits.append(np.zeros(7))  # 默认logits
+                actions.append(action)
+            
+            if next_state is not None:
+                next_states.append(next_state)
+        
+        return states, embeddings, actions, rewards, logits, next_states
     
     def save_models(self, output_dir):
         """

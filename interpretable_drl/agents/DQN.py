@@ -13,12 +13,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import random
-
+import os
 
 class DQN:
     
     def __init__(self,params,env):
-        tf.compat.v1.disable_eager_execution()
+        # tf.compat.v1.disable_eager_execution()
         self.params=params
         self.memory_buffer = deque(maxlen=1000)
         self.env=env
@@ -140,8 +140,48 @@ class DQN:
             self.model.save_weights('./model/dqn.h5')
         return history
     
-    def load_model(self):
-        self.model.load_weights('./model/dqn.h5')
+    def save_model(self, save_dir):
+        """
+        保存模型权重到指定目录
+        
+        Args:
+            save_dir: 保存目录路径
+        """
+        os.makedirs(save_dir, exist_ok=True)
+        model_path = os.path.join(save_dir, 'dqn_model.h5')
+        target_model_path = os.path.join(save_dir, 'dqn_target_model.h5')
+        
+        self.model.save_weights(model_path)
+        self.target_model.save_weights(target_model_path)
+        print(f"DQN模型已保存到 {save_dir}")
+        
+    def load_model(self, load_dir=None):
+        """
+        从指定目录加载模型权重
+        
+        Args:
+            load_dir: 加载目录路径，如果为None则使用默认路径
+        """
+        if load_dir is None:
+            # 使用默认路径
+            model_path = './model/dqn.h5'
+            self.model.load_weights(model_path)
+            self.target_model.set_weights(self.model.get_weights())
+            print(f"DQN模型已从默认路径加载")
+        else:
+            model_path = os.path.join(load_dir, 'dqn_model.h5')
+            target_model_path = os.path.join(load_dir, 'dqn_target_model.h5')
+        
+            try:
+                self.model.load_weights(model_path)
+                if os.path.exists(target_model_path):
+                    self.target_model.load_weights(target_model_path)
+                else:
+                    # 如果没有目标模型文件，就复制主模型的权重
+                    self.target_model.set_weights(self.model.get_weights())
+                print(f"DQN模型已加载自 {load_dir}")
+            except Exception as e:
+                print(f"加载DQN模型失败: {e}")
     
     def test(self,rain):
         # simulation on given rainfall

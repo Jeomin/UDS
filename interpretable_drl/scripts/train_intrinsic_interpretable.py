@@ -132,12 +132,12 @@ def pretrain_decision_tree(env, rainfall_data, num_classes, output_dir):
     states = []
     rewards = []
     
-    for rain in rainfall_data[:10]:  # 使用部分降雨样本
+    for rain in rainfall_data[:10]:  # 使用部分降雨样本 # TODO 为什么是一点点数据？
         s = env.reset(rain)
         done = False
         
         while not done:
-            # 随机动作或使用启发式规则
+            # 随机动作或使用启发式规则 为什么要这样构建数据，直接拿降雨当前状态可以吗
             action = [np.random.randint(2) for _ in range(len(env.config['action_assets']))]
             s_next, reward, flooding, cso, done = env.step(action)
             
@@ -331,51 +331,46 @@ def simulate_episode(env, rain, soft_tree, agent_manager, epoch):
     episode_data = []
     
     while not done:
-        # # 生成策略嵌入
-        # embedding = soft_tree.generate_embedding(s)
+        embedding = soft_tree.generate_embedding(s)
         
-        # # 选择动作（根据嵌入和当前状态）
-        # action, class_id = agent_manager.choose_action(s, embedding, 
-        #                                              train_mode=(epoch < 10))
+        # 选择动作（根据embedding和当前状态）
+        result, class_id = agent_manager.choose_action(s, embedding, 
+                                                    train_mode=(epoch < 10))
         
-        # # 执行动作
-        # s_next, reward, flooding, cso, done = env.step(action)
+        # 根据agent类型处理动作格式
+        if isinstance(result, tuple) and len(result) == 2:
+            # PPO风格：返回(logits, action)
+            logits, action = result
+            if hasattr(action, 'shape') and len(action.shape) > 1:
+                action_for_env = action[0].tolist()
+            else:
+                action_for_env = action.tolist() if hasattr(action, 'tolist') else action
+        else:
+            # DQN风格：直接返回动作
+            action = result
+            # 如果是整数索引，从动作表中查找
+            if isinstance(action, (int, np.integer)):
+                # 假设agent_manager有action_table属性
+                if hasattr(agent_manager, 'action_table'):
+                    action_for_env = agent_manager.action_table[action, :].tolist()
+                else:
+                    # 如果没有action_table，使用默认二进制转换
+                    action_for_env = [int(bit) for bit in format(action, f'0{len(env.config["action_assets"])}b')]
+            else:
+                if hasattr(action, 'shape') and len(action.shape) > 1:
+                    action_for_env = action[0].tolist()
+                else:
+                    action_for_env = action.tolist() if hasattr(action, 'tolist') else action
+
+        s_next, reward, flooding, cso, done = env.step(action_for_env)
         
-        # # 保存数据 (状态, 嵌入, 动作, 奖励, 类别ID, 下一状态, 终止标志)
-        # episode_data.append((s, embedding, action, reward, class_id, s_next, done))
+        # 对于数据收集，保存原始action
+        original_action = result[1] if isinstance(result, tuple) and len(result) == 2 else result
         
-        # # 进入下一状态
-        # s = s_next
-        while not done:
-            try:
-                embedding = soft_tree.generate_embedding(s)
-            except Exception as e:
-                print(f"生成嵌入时出错: {e}")
-                # 出错时使用均匀分布
-                embedding = np.ones(soft_tree.num_classes) / soft_tree.num_classes
-            
-            # 选择动作（根据嵌入和当前状态）
-            try:
-                action, class_id = agent_manager.choose_action(s, embedding, 
-                                                        train_mode=(epoch < 10))
-            except Exception as e:
-                print(f"选择动作时出错: {e}")
-                # 随机动作
-                action = [np.random.randint(2) for _ in range(len(env.config['action_assets']))]
-                class_id = np.random.randint(soft_tree.num_classes)
-            
-            # 执行动作
-            try:
-                s_next, reward, flooding, cso, done = env.step(action)
-            except Exception as e:
-                print(f"执行动作时出错: {e}")
-                break
-            
-            # 保存数据 (状态, 嵌入, 动作, 奖励, 类别ID, 下一状态, 终止标志)
-            episode_data.append((s, embedding, action, reward, class_id, s_next, done))
-            
-            # 进入下一状态
-            s = s_next
+        # 状态, 嵌入, 动作, 奖励, 类别ID, 下一状态, 终止标志
+        episode_data.append((s, embedding, original_action, reward, class_id, s_next, done))
+
+        s = s_next
     
     return episode_data
 
@@ -436,8 +431,7 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
     total_cso = 0
     total_steps = 0
     class_counts = {i: 0 for i in range(soft_tree.num_classes)}
-    
-    # 测试数据
+
     test_history = {
         'states': [],
         'embeddings': [],
@@ -447,15 +441,13 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
         'floodings': [],
         'csos': []
     }
-    
-    # 创建解释器
+
     explainer = IntrinsicExplainer(
         soft_tree=soft_tree, 
         env_config=env.config,
         state_names=[f"特征_{i}" for i in range(len(env.config['states']))]
     )
-    
-    # 评估每个降雨样本
+
     for i, rain in enumerate(rainfall_data):
         print(f"  评估降雨样本 {i+1}/{len(rainfall_data)}...")
         
@@ -465,51 +457,66 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
         episode_flooding = 0
         episode_cso = 0
         episode_steps = 0
-        
-        # 收集解释
+
         explanations = []
         
         while not done:
-            # 生成场景嵌入
             embedding = soft_tree.generate_embedding(s)
             class_id = np.argmax(embedding)
             class_counts[class_id] += 1
+            result, _ = agent_manager.choose_action(s, embedding, train_mode=False)
             
-            # 使用对应agent选择动作
-            action, _ = agent_manager.choose_action(s, embedding, train_mode=False)
-            
-            # 执行动作
-            s_next, reward, flooding, cso, done = env.step(action)
-            
-            # 生成解释
-            explanation = explainer.generate_explanation(s, embedding, action, class_id)
+            if isinstance(result, tuple) and len(result) == 2:
+                # PPO风格：返回(logits, action)
+                logits, action = result
+                if hasattr(action, 'shape') and len(action.shape) > 1:
+                    action_for_env = action[0].tolist()
+                else:
+                    action_for_env = action.tolist() if hasattr(action, 'tolist') else action
+
+                action_for_history = action
+            else:
+                # DQN风格：直接返回动作
+                action = result
+                if isinstance(action, (int, np.integer)):
+                    if hasattr(agent_manager, 'action_table'):
+                        action_for_env = agent_manager.action_table[action, :].tolist()
+                    else:
+                        # 如果没有action_table，使用默认二进制转换
+                        action_for_env = [int(bit) for bit in format(action, f'0{len(env.config["action_assets"])}b')]
+                else:
+                    if hasattr(action, 'shape') and len(action.shape) > 1:
+                        action_for_env = action[0].tolist()
+                    else:
+                        action_for_env = action.tolist() if hasattr(action, 'tolist') else action
+
+                action_for_history = action
+
+            s_next, reward, flooding, cso, done = env.step(action_for_env)
+
+            explanation = explainer.generate_explanation(s, embedding, action_for_env, class_id)
             explanations.append(explanation)
             
-            # 记录数据
             test_history['states'].append(s)
             test_history['embeddings'].append(embedding)
             test_history['class_ids'].append(class_id)
-            test_history['actions'].append(action)
+            test_history['actions'].append(action_for_history)
             test_history['rewards'].append(reward)
             test_history['floodings'].append(flooding)
             test_history['csos'].append(cso)
             
-            # 更新统计信息
             episode_reward += reward
             episode_flooding += flooding
             episode_cso += cso
             episode_steps += 1
-            
-            # 进入下一状态
+
             s = s_next
-        
-        # 累加统计信息
+
         total_reward += episode_reward
         total_flooding += episode_flooding
         total_cso += episode_cso
         total_steps += episode_steps
-        
-        # 保存这个样本的解释
+
         with open(os.path.join(output_dir, f"explanations_epoch_{epoch}_sample_{i}.txt"), 'w') as f:
             for j, exp in enumerate(explanations):
                 f.write(f"Step {j}:\n")
@@ -518,14 +525,12 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
                 f.write(f"  理由: {exp['reason']}\n")
                 f.write(f"  预期后果: {exp['consequence']}\n")
                 f.write(f"  备选方案: {exp['alternatives']}\n\n")
-    
-    # 计算平均指标
+
     avg_reward = total_reward / max(1, len(rainfall_data))
     avg_flooding = total_flooding / max(1, len(rainfall_data))
     avg_cso = total_cso / max(1, len(rainfall_data))
     avg_steps = total_steps / max(1, len(rainfall_data))
-    
-    # 保存评估结果
+
     with open(os.path.join(output_dir, f"evaluation_epoch_{epoch}.txt"), 'w') as f:
         f.write(f"Epoch: {epoch}\n")
         f.write(f"平均奖励: {avg_reward:.4f}\n")
@@ -536,19 +541,15 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
         for class_id, count in class_counts.items():
             f.write(f"  场景 {class_id}: {count} 步 ({count/max(1, total_steps)*100:.2f}%)\n")
     
-    # 保存测试历史
     np.save(os.path.join(output_dir, f"test_history_epoch_{epoch}.npy"), test_history)
-    
-    # 创建评估图表
+
     plt.figure(figsize=(15, 10))
     
-    # 绘制奖励曲线
     plt.subplot(3, 1, 1)
     plt.plot(test_history['rewards'])
     plt.title(f'Rewards (Avg: {avg_reward:.4f})')
     plt.grid(True)
-    
-    # 绘制洪水和CSO
+
     plt.subplot(3, 1, 2)
     plt.plot(test_history['floodings'], label='Flooding')
     plt.plot(test_history['csos'], label='CSO')
