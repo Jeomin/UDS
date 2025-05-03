@@ -8,11 +8,11 @@
             "program": "${workspaceFolder}/main.py",
             "args": [
                 "--mode", "intrinsic_train",
-                "--num-classes", "5",
-                "--tree-depth", "4",
+                "--num-classes", "2",
+                "--tree-depth", "2",
                 "--temperature", "1.0",
                 "--epochs", "10",
-                "--num-train", "50",
+                "--num-train", "5",
                 "--agent-type", "ppo"
             ],
             "console": "integratedTerminal",

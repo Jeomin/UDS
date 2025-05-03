@@ -160,7 +160,7 @@ class SWMM_ENV:
         
         CSO = CSOtem - self.CSO
         self.CSO = CSOtem
-        rewards = -(flooding+CSO)/inflow
+        rewards = -(flooding+CSO)/(inflow+1e-6)
         #rewards = np.exp(-(flooding/inflow)**2/0.01) + np.exp(-(CSO/inflow)**2/0.01)
         
         #降雨结束检测

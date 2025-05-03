@@ -16,11 +16,11 @@ def parse_args():
     
     # 运行模式
     parser.add_argument('--mode', type=str, 
-                        choices=['train', 'train_ppo', 'train_dqn', 'evaluate', 'intrinsic_train'],
-                        default='train', 
+                        choices=['intrinsic_train', 'train_ppo', 'train_dqn', 'evaluate'],
+                        default='intrinsic_train', 
                         help='运行模式')
     
-    # 模型类型
+    # 模型类型， 用于评估
     parser.add_argument('--model', type=str, 
                         choices=['ppo', 'dqn', 'intrinsic'],
                         default='ppo', 
@@ -111,12 +111,14 @@ def evaluate_model(args):
         evaluate_intrinsic(args)
     elif args.model == 'ppo':
         print("评估PPO模型")
-        from scripts.evaluate import evaluate_ppo
-        evaluate_ppo(args)
+        # TODO: 评估PPO模型
+        # from scripts.evaluate import evaluate_ppo
+        # evaluate_ppo(args)
     elif args.model == 'dqn':
         print("评估DQN模型")
-        from scripts.evaluate import evaluate_dqn
-        evaluate_dqn(args)
+        # TODO: 评估DQN模型
+        # from scripts.evaluate import evaluate_dqn
+        # evaluate_dqn(args)
     else:
         print(f"未知模型类型: {args.model}")
 
@@ -131,15 +133,6 @@ def main():
         print("训练内生可解释系统")
         print(f"使用agent类型: {args.agent_type}")
         train_intrinsic(args)
-    elif args.mode == 'train':
-        if args.model == 'ppo':
-            print("训练PPO模型并进行后解释")
-            train_ppo(args)
-        elif args.model == 'dqn':
-            print("训练DQN模型并进行后解释")
-            train_dqn(args)
-        else:
-            print(f"未知模型类型: {args.model}")
     elif args.mode == 'train_ppo':
         print("训练PPO模型并进行后解释")
         train_ppo(args)

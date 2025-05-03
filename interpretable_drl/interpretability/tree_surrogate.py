@@ -170,14 +170,8 @@ class TreeSurrogateModel:
         Args:
             feature_names: 特征名称列表
             class_names: 类别名称列表
-            figsize: 图表大小
-            
-        Returns:
-            fig: 图表对象
+            figsize: 图形大小
         """
-        if not self.model:
-            raise ValueError("模型尚未训练")
-            
         fig, ax = plt.subplots(figsize=figsize)
         
         # 使用提供的特征名称或默认名称
@@ -188,6 +182,9 @@ class TreeSurrogateModel:
         if class_names is None and hasattr(self, 'label_encoder') and self.label_encoder.classes_.size > 0:
             try:
                 class_names = self.label_encoder.classes_
+                # 确保class_names是列表类型
+                if isinstance(class_names, np.ndarray):
+                    class_names = class_names.tolist()
             except:
                 class_names = [f"类别_{i}" for i in range(self.model.n_classes_)]
                 

@@ -146,7 +146,7 @@ def evaluate_intrinsic(args):
             class_id = np.argmax(embedding)
             results['class_distribution'][class_id] += 1
 
-            action, _ = agent_manager.choose_action(s, embedding, train_mode=False)
+            _, action = agent_manager.choose_action(s, embedding, train_mode=False)
 
             s_next, reward, flooding, cso, done = env.step(action)
 

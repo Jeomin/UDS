@@ -11,7 +11,8 @@ import datetime
 import argparse
 import tensorflow as tf
 from sklearn.cluster import KMeans
-
+import agents.PPO as PPO
+import agents.DQN as DQN
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from interpretability.intrinsic_soft_tree import IntrinsicSoftTree
@@ -126,13 +127,11 @@ def pretrain_decision_tree(env, rainfall_data, num_classes, output_dir):
         soft_tree: 训练后的软决策树
         kmeans: KMeans聚类模型
     """
-    print("预训练软决策树...")
-    
     # 收集状态和奖励数据
     states = []
     rewards = []
     
-    for rain in rainfall_data[:10]:  # 使用部分降雨样本 # TODO 为什么是一点点数据？
+    for rain in rainfall_data[:10]:  # TODO 一点点数据？这里预训练写的太蠢了
         s = env.reset(rain)
         done = False
         
@@ -147,10 +146,10 @@ def pretrain_decision_tree(env, rainfall_data, num_classes, output_dir):
             
             s = s_next
     
-    # 使用聚类算法划分场景
+    # 使用聚类算法划分场景，为决策树训练打标真值
     print("使用KMeans聚类划分场景...")
     
-    # 可以根据奖励、状态或两者结合进行聚类
+    # 根据奖励、状态或两者结合进行聚类
     X = np.hstack([np.array(states), np.array(rewards)])
     
     kmeans = KMeans(n_clusters=num_classes)
@@ -196,14 +195,14 @@ def pretrain_decision_tree(env, rainfall_data, num_classes, output_dir):
     
     # 训练模型
     soft_tree.model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.01),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
         loss='categorical_crossentropy',
         metrics=['accuracy']
     )
     
     history = soft_tree.model.fit(
         np.array(states), one_hot_labels,
-        epochs=100,
+        epochs=20,
         batch_size=32,
         validation_split=0.2,
         verbose=1
@@ -312,66 +311,109 @@ def initialize_specialized_agents(env, num_classes, agent_type='ppo'):
     return agent_manager
 
 
-def simulate_episode(env, rain, soft_tree, agent_manager, epoch):
+def simulate_episode(env, rain, soft_tree, agent_manager, epoch, exploration_phase=True):
     """
-    模拟一个场景并收集数据
-    
+    模拟一个场景并收集数据 (适配修正后的 PPO)
+
     Args:
         env: SWMM环境
         rain: 降雨数据
-        soft_tree: 软决策树
+        soft_tree: 软决策树 (MLP)
         agent_manager: 专门化agent管理器
         epoch: 当前训练轮数
-        
+        exploration_phase: 是否处于探索阶段 (传递给 agent.choose_action)
+
     Returns:
-        episode_data: 模拟数据列表
+        episode_data: 模拟数据列表, 格式为:
+                      [(state, embedding, action_info, reward, class_id, next_state, done), ...]
+                      action_info (dict):
+                          - PPO: {'action': action_np, 'logp_old': logp_action_np}
+                          - DQN: {'action_index': action_index}
     """
     s = env.reset(rain)
     done = False
     episode_data = []
-    
+    num_actions_expected = len(env.config["action_assets"])
+
     while not done:
         embedding = soft_tree.generate_embedding(s)
-        
-        # 选择动作（根据embedding和当前状态）
-        result, class_id = agent_manager.choose_action(s, embedding, 
-                                                    train_mode=(epoch < 10))
-        
-        # 根据agent类型处理动作格式
-        if isinstance(result, tuple) and len(result) == 2:
-            # PPO风格：返回(logits, action)
-            logits, action = result
-            if hasattr(action, 'shape') and len(action.shape) > 1:
-                action_for_env = action[0].tolist()
+
+        # 选择动作
+        # PPO 返回 (action_np, logp_action_np)
+        # DQN 返回 action_index
+        result, class_id = agent_manager.choose_action(s, embedding, # Pass combined state to agent
+                                                       train_mode=exploration_phase)
+
+        action_for_env = None
+        action_info_to_store = None
+        agent = agent_manager.agents[class_id] # Get the specific agent instance
+
+        # --- PPO 处理 ---
+        # 检查 agent 类型，并且 result 是否是 PPO 的期望输出 (action, logp)
+        if isinstance(agent, PPO):
+            logp_action_np, action_np = result # PPO 返回 action (0/1 array) 和 logp
+            action_for_env = action_np.tolist()
+            action_info_to_store = {'action': action_np, 'logp_old': logp_action_np}
+
+            # 检查动作维度
+            if len(action_for_env) != num_actions_expected:
+                print(f"警告: PPO 动作维度 {len(action_for_env)} 与预期 {num_actions_expected} 不匹配!")
+                # 可以选择填充、截断或使用默认动作
+                action_for_env = [0] * num_actions_expected
+                # 相应地调整 action_info (如果需要)
+                action_info_to_store['action'] = np.array(action_for_env)
+                # logp_old 此时可能不准确，但暂时保留
+
+        # --- DQN 处理 ---
+        # 检查 agent 类型，并且 result 是否是 DQN 的期望输出 (action_index)
+        elif isinstance(agent, DQN):
+            # DQN 返回动作索引 (整数)
+            action_index = result
+            action_info_to_store = {'action_index': action_index}
+
+            # 尝试从 agent 获取 action_table
+            if hasattr(agent, 'action_table') and agent.action_table is not None:
+                action_table = agent.action_table
+                if action_index < len(action_table):
+                    action_for_env = action_table[action_index, :].tolist()
+                else:
+                    print(f"警告: DQN 动作索引 {action_index} 超出 action_table 范围 {len(action_table)}!")
+                    action_for_env = [int(bit) for bit in format(action_index, f'0{num_actions_expected}b')] # Fallback
             else:
-                action_for_env = action.tolist() if hasattr(action, 'tolist') else action
+                 # Fallback: 如果 agent 没有 action_table
+                 print(f"警告: 未找到 Agent {class_id} (DQN?) 的 action_table，使用二进制转换。")
+                 action_for_env = [int(bit) for bit in format(action_index, f'0{num_actions_expected}b')]
+
+            # 确保 action_for_env 是列表
+            if not isinstance(action_for_env, list):
+                 action_for_env = [0] * num_actions_expected # Fallback
+
+            # 检查动作维度
+            if len(action_for_env) != num_actions_expected:
+                 print(f"警告: DQN 动作维度 {len(action_for_env)} 与预期 {num_actions_expected} 不匹配!")
+                 action_for_env = [0] * num_actions_expected
+
         else:
-            # DQN风格：直接返回动作
-            action = result
-            # 如果是整数索引，从动作表中查找
-            if isinstance(action, (int, np.integer)):
-                # 假设agent_manager有action_table属性
-                if hasattr(agent_manager, 'action_table'):
-                    action_for_env = agent_manager.action_table[action, :].tolist()
-                else:
-                    # 如果没有action_table，使用默认二进制转换
-                    action_for_env = [int(bit) for bit in format(action, f'0{len(env.config["action_assets"])}b')]
-            else:
-                if hasattr(action, 'shape') and len(action.shape) > 1:
-                    action_for_env = action[0].tolist()
-                else:
-                    action_for_env = action.tolist() if hasattr(action, 'tolist') else action
+             # 如果 result 格式未知
+             print(f"警告: Agent {class_id} 返回了未知格式的动作结果: {result}")
+             action_for_env = [0] * num_actions_expected # 使用默认动作
+             # action_info 需要一个默认值，或者标记为无效
+             action_info_to_store = {'action': np.array(action_for_env), 'logp_old': -np.inf} # PPO 风格的默认值
 
-        s_next, reward, flooding, cso, done = env.step(action_for_env)
-        
-        # 对于数据收集，保存原始action
-        original_action = result[1] if isinstance(result, tuple) and len(result) == 2 else result
-        
-        # 状态, 嵌入, 动作, 奖励, 类别ID, 下一状态, 终止标志
-        episode_data.append((s, embedding, original_action, reward, class_id, s_next, done))
 
-        s = s_next
-    
+        # 执行环境步骤
+        if action_for_env is not None:
+            s_next, reward, flooding, cso, done = env.step(action_for_env)
+        else:
+            # 如果 action_for_env 仍然是 None (理论上不应发生，因为有 fallback)
+             raise ValueError("错误: 未能确定环境动作 action_for_env")
+
+        # (state, embedding, action_info, reward, class_id, next_state, done)
+        # action_info 是包含动作和可能的 logp 的字典
+        episode_data.append((s, embedding, action_info_to_store, reward, class_id, s_next, done))
+
+        s = s_next # 更新状态 (原始状态)
+
     return episode_data
 
 
@@ -517,7 +559,8 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
         total_cso += episode_cso
         total_steps += episode_steps
 
-        with open(os.path.join(output_dir, f"explanations_epoch_{epoch}_sample_{i}.txt"), 'w') as f:
+        explanation_file = os.path.join(output_dir, f"explanations_epoch_{epoch}_sample_{i}.txt")
+        with open(explanation_file, 'w', encoding='utf-8') as f:
             for j, exp in enumerate(explanations):
                 f.write(f"Step {j}:\n")
                 f.write(f"  场景: {exp['scene']}\n")
@@ -531,7 +574,8 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
     avg_cso = total_cso / max(1, len(rainfall_data))
     avg_steps = total_steps / max(1, len(rainfall_data))
 
-    with open(os.path.join(output_dir, f"evaluation_epoch_{epoch}.txt"), 'w') as f:
+    eval_summary_file = os.path.join(output_dir, f"evaluation_epoch_{epoch}.txt")
+    with open(eval_summary_file, 'w', encoding='utf-8') as f:
         f.write(f"Epoch: {epoch}\n")
         f.write(f"平均奖励: {avg_reward:.4f}\n")
         f.write(f"平均洪水: {avg_flooding:.4f}\n")
@@ -543,30 +587,52 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
     
     np.save(os.path.join(output_dir, f"test_history_epoch_{epoch}.npy"), test_history)
 
-    plt.figure(figsize=(15, 10))
-    
-    plt.subplot(3, 1, 1)
-    plt.plot(test_history['rewards'])
-    plt.title(f'Rewards (Avg: {avg_reward:.4f})')
-    plt.grid(True)
+    try:
+        plt.figure(figsize=(15, 12))
 
-    plt.subplot(3, 1, 2)
-    plt.plot(test_history['floodings'], label='Flooding')
-    plt.plot(test_history['csos'], label='CSO')
-    plt.title(f'Flooding (Avg: {avg_flooding:.4f}) and CSO (Avg: {avg_cso:.4f})')
-    plt.legend()
-    plt.grid(True)
-    
-    # 绘制场景分布
-    plt.subplot(3, 1, 3)
-    plt.plot(test_history['class_ids'])
-    plt.title('Scene Classification')
-    plt.yticks(range(soft_tree.num_classes))
-    plt.grid(True)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f"evaluation_epoch_{epoch}.png"))
-    plt.close()
+        # 奖励图
+        plt.subplot(4, 1, 1)
+        plt.plot(test_history['rewards'])
+        plt.title(f'Epoch {epoch} - Rewards per Step (Avg Reward per Episode: {avg_reward:.4f})')
+        plt.ylabel('Reward')
+        plt.grid(True)
+
+        # 洪水与CSO图
+        plt.subplot(4, 1, 2)
+        plt.plot(test_history['floodings'], label=f'Cumulative Flooding (Total Avg: {avg_flooding:.2f})')
+        plt.plot(test_history['csos'], label=f'Cumulative CSO (Total Avg: {avg_cso:.2f})')
+        plt.title('Cumulative Flooding and CSO per Step')
+        plt.ylabel('Volume')
+        plt.legend()
+        plt.grid(True)
+
+        # 场景分类图
+        plt.subplot(4, 1, 3)
+        plt.plot(test_history['class_ids'], marker='.', linestyle='None', markersize=4)
+        plt.title('Scene Classification per Step')
+        plt.yticks(range(soft_tree.num_classes))
+        plt.ylabel('Scene Class ID')
+        plt.grid(True)
+
+        # PPO Log Prob 图 (如果存在)
+        valid_logps = [lp for lp in test_history['logps'] if lp is not None and lp != -np.inf]
+        if valid_logps:
+            plt.subplot(4, 1, 4)
+            plt.plot(valid_logps)
+            plt.title('PPO Action Log Probability per Step')
+            plt.ylabel('Log Probability')
+            plt.grid(True)
+
+        plt.xlabel('Time Step')
+        plt.tight_layout()
+        plot_file = os.path.join(output_dir, f"evaluation_epoch_{epoch}.png")
+        plt.savefig(plot_file)
+        plt.close()
+        print(f"评估图表已保存到 {plot_file}")
+
+    except Exception as e:
+        print(f"错误: 绘制评估图表失败: {e}")
+        plt.close()
     
     return avg_reward, avg_flooding, avg_cso
 
