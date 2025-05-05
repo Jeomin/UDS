@@ -2,7 +2,7 @@
 """
 Interpretable agent class that adds explainability to RL agents
 """
-from .base_agent import BaseAgent
+from agents.base_agent import BaseAgent
 import numpy as np
 import datetime
 

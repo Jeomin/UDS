@@ -162,7 +162,7 @@ class ConditionalProbabilityAnalysis:
                         value = float(parts[2])
                         
                         # 获取特征索引
-                        if feature.startswith("特征_"):
+                        if feature.startswith("Feature_"):
                             try:
                                 feature_idx = int(feature.split("_")[1])
                             except:

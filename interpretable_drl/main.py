@@ -33,7 +33,7 @@ def parse_args():
                         help='agent类型 (用于内生可解释系统)')
     
     # 内生可解释框架参数
-    parser.add_argument('--num-classes', type=int, default=5,
+    parser.add_argument('--num-classes', type=int, default=4,
                        help='场景类别数量')
     
     parser.add_argument('--tree-depth', type=int, default=4,
@@ -59,7 +59,7 @@ def parse_args():
                        help='学习率')
     
     # 评估参数
-    parser.add_argument('--num-test', type=int, default=5,
+    parser.add_argument('--num-test', type=int, default=10,
                        help='测试样本数量')
     
     # 路径设置
@@ -105,22 +105,9 @@ def train_intrinsic(args):
 
 
 def evaluate_model(args):
-    if args.model == 'intrinsic':
-        print("评估内生可解释系统")
-        from scripts.evaluate import evaluate_intrinsic
-        evaluate_intrinsic(args)
-    elif args.model == 'ppo':
-        print("评估PPO模型")
-        # TODO: 评估PPO模型
-        # from scripts.evaluate import evaluate_ppo
-        # evaluate_ppo(args)
-    elif args.model == 'dqn':
-        print("评估DQN模型")
-        # TODO: 评估DQN模型
-        # from scripts.evaluate import evaluate_dqn
-        # evaluate_dqn(args)
-    else:
-        print(f"未知模型类型: {args.model}")
+    print("评估可解释系统")
+    from scripts.evaluate import evaluate_intrinsic
+    evaluate_intrinsic(args)
 
 
 def main():

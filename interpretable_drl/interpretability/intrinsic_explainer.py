@@ -19,7 +19,7 @@ class IntrinsicExplainer:
         """
         self.soft_tree = soft_tree
         self.env_config = env_config
-        self.state_names = state_names or [f"特征_{i}" for i in range(len(env_config['states']))]
+        self.state_names = state_names or [f"Feature_{i}" for i in range(len(env_config['states']))]
         
         # 场景描述模板
         self.scene_templates = [
@@ -77,17 +77,35 @@ class IntrinsicExplainer:
         else:
             scene = f"场景 {class_id}"
         
-        # 2. 决策路径（分析决策树分支）
-        path = self._analyze_decision_path(state)
+        # # 2. 决策路径（分析决策树分支）mlp
+        # path = self._analyze_decision_path(state)
         
-        # 3. 决策理由
+        # # 3. 决策理由
+        # reason_id = class_id % len(self.reason_templates)
+        # reason = self.reason_templates[reason_id]
+
+        # # 添加特征重要性
+        # features = self._identify_important_features(state, path)
+        # if features:
+        #     feature_str = ", ".join([f"{self.state_names[f]}={state[f]:.2f}" for f in features])
+        #     reason += f"。关键因素: {feature_str}"
+
+        # 2. 决策路径 (使用的 soft_tree 方法)
+        path_nodes, predicted_class = self.soft_tree.predict_path(state)
+        # predicted_class 应该与传入的 class_id (来自 embedding argmax) 大致相同
+        if predicted_class != class_id:
+             print(f"警告 (Explainer): 树预测类别 {predicted_class} 与 embedding 最大值类别 {class_id} 不符。")
+
+        # 从节点路径生成规则描述
+        path = self._analyze_decision_path(path_nodes)
+
+        # 3. 决策理由 (使用新的 soft_tree 方法获取特征)
         reason_id = class_id % len(self.reason_templates)
         reason = self.reason_templates[reason_id]
-        
-        # 添加特征重要性
-        features = self._identify_important_features(state, path)
-        if features:
-            feature_str = ", ".join([f"{self.state_names[f]}={state[f]:.2f}" for f in features])
+        # 使用从路径中提取的特征
+        features_indices = self._identify_important_features_from_path(path_nodes)
+        if features_indices:
+            feature_str = ", ".join([f"{self.state_names[f_idx]}={state[f_idx]:.2f}" for f_idx in features_indices if f_idx < len(self.state_names)])
             reason += f"。关键因素: {feature_str}"
         
         # 4. 预期后果
@@ -124,7 +142,82 @@ class IntrinsicExplainer:
         
         return explanation
     
-    def _analyze_decision_path(self, state):
+    def _analyze_decision_path(self, path_nodes):
+        """
+        分析状态在决策树中的路径节点，生成规则描述列表
+
+        Args:
+            path_nodes: 决策路径上的节点索引列表
+
+        Returns:
+            path_description: 决策路径规则描述列表
+        """
+        if not path_nodes or not hasattr(self.soft_tree, 'model') or not hasattr(self.soft_tree.model, 'tree_'):
+            return ["路径不可用"]
+
+        tree = self.soft_tree.model.tree_
+        path_description = []
+
+        # 遍历路径上的内部节点 (最后一个是叶节点，没有规则)
+        for i in range(len(path_nodes) - 1):
+            node_id = path_nodes[i]
+            child_id = path_nodes[i+1]
+
+            if node_id < 0 or node_id >= tree.node_count: continue 
+            # 检查是否是叶节点
+            if tree.children_left[node_id] == tree.children_right[node_id]:
+                 continue
+
+            # 获取分裂规则
+            rule = self.soft_tree.get_decision_rule(node_id, self.state_names)
+
+            # 走向 (左 <=, 右 >)
+            if child_id == tree.children_left[node_id]:
+                # 左子节点表示满足 <= 条件
+                path_description.append(f"节点 {node_id}: {rule} (True)")
+            elif child_id == tree.children_right[node_id]:
+                # 右子节点，表示满足 > 条件
+                # 修改规则以表示 >
+                rule_parts = rule.split("<=")
+                if len(rule_parts) == 2:
+                    negated_rule = f"{rule_parts[0].strip()} > {rule_parts[1].strip()}"
+                    path_description.append(f"节点 {node_id}: {negated_rule} (True)")
+                else: # 如果规则格式不符
+                     path_description.append(f"节点 {node_id}: {rule} (False?)")
+            else:
+                 path_description.append(f"节点 {node_id}: {rule} (未知走向)")
+
+
+        return path_description
+
+    def _identify_important_features_from_path(self, path_nodes):
+        """
+        从决策路径中识别重要的特征索引
+
+        Args:
+            path_nodes: 决策路径上的节点索引列表
+
+        Returns:
+            important_features: 重要特征索引列表
+        """
+        if not path_nodes or not hasattr(self.soft_tree, 'model') or not hasattr(self.soft_tree.model, 'tree_'):
+            return set()
+
+        tree = self.soft_tree.model.tree_
+        important_features = set()
+
+        # 遍历路径上的内部节点
+        for node_id in path_nodes[:-1]:
+             if node_id < 0 or node_id >= tree.node_count: continue
+             # 检查是否是内部节点
+             if tree.children_left[node_id] != tree.children_right[node_id]:
+                  feature_index = tree.feature[node_id]
+                  if feature_index >= 0:
+                       important_features.add(feature_index)
+
+        return list(important_features)
+    
+    def _analyze_decision_path_mlp(self, state):
         """
         分析状态在决策树中的路径
         
@@ -158,7 +251,7 @@ class IntrinsicExplainer:
         
         return path_description
     
-    def _identify_important_features(self, state, path):
+    def _identify_important_features_mlp(self, state, path):
         """
         识别对决策最重要的特征
         
@@ -182,9 +275,8 @@ class IntrinsicExplainer:
                 except:
                     continue
         
-        # 如果从路径中未找到重要特征，使用一些启发式方法
+        # 如果从路径中未找到重要特征
         if not important_features:
-            # 例如，选择水位和降雨特征
             for i, name in enumerate(self.state_names):
                 if "水位" in name or "流量" in name or "降雨" in name:
                     important_features.append(i)

@@ -8,13 +8,22 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
+import argparse
+import yaml 
+from interpretability.intrinsic_soft_tree import IntrinsicSoftTree
+from interpretability.specialized_agents import SpecializedAgentManager
+from interpretability.intrinsic_explainer import IntrinsicExplainer
+import environment.SWMM_ENV as SWMM_ENV
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def load_rainfall_data(filepath):
     """加载降雨数据"""
     try:
-        rainfall_data = np.load(filepath, allow_pickle=True).tolist()
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        rainfall_path = os.path.join(base_dir, "data", "rainfall", os.path.basename(filepath))
+        
+        rainfall_data = np.load(rainfall_path, allow_pickle=True).tolist()
         print(f"成功加载降雨数据: {len(rainfall_data)} 个样本")
         return rainfall_data
     except Exception as e:
@@ -24,7 +33,6 @@ def load_rainfall_data(filepath):
 
 def setup_environment(env_path):
     """设置SWMM环境"""
-    import environment.SWMM_ENV as SWMM_ENV
     
     env_params = {
         'orf': env_path,
@@ -36,16 +44,13 @@ def setup_environment(env_path):
 
 
 def evaluate_intrinsic(args):
-    """评估内生可解释系统"""
-    from interpretability.intrinsic_soft_tree import IntrinsicSoftTree
-    from interpretability.specialized_agents import SpecializedAgentManager
-    from interpretability.intrinsic_explainer import IntrinsicExplainer
-
+    """评估可解释系统"""
     output_dir = os.path.join(
         args.output_dir,
         f"evaluate_intrinsic_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
     os.makedirs(output_dir, exist_ok=True)
+    print(f"评估结果将保存在: {output_dir}")
 
     env = setup_environment(args.env_path)
 
@@ -54,67 +59,59 @@ def evaluate_intrinsic(args):
         print("无法加载降雨数据，退出")
         return
 
-    test_data = rainfall_data[:args.num_test]
+    # 选择测试数据子集
+    if args.num_test > len(rainfall_data):
+        print(f"警告: 请求的测试样本数 ({args.num_test}) 大于可用数据 ({len(rainfall_data)})。将使用所有可用数据。")
+        args.num_test = len(rainfall_data)
+    elif args.num_test <= 0:
+         print(f"警告: 测试样本数 ({args.num_test}) 无效。将使用 1 个样本。")
+         args.num_test = 1
 
-    if args.model_path is None:
-        print("未指定模型路径，无法评估")
+    test_data = rainfall_data[:args.num_test]
+    print(f"使用 {len(test_data)} 个样本进行评估。")
+
+    if args.model_path is None or not os.path.isdir(args.model_path):
+        print(f"错误: 模型路径 '{args.model_path}' 无效或未指定。")
         return
         
     tree_path = os.path.join(args.model_path, "final_soft_tree.pkl")
     agent_dir = os.path.join(args.model_path, "agents")
     
-    if not os.path.exists(tree_path) or not os.path.exists(agent_dir):
-        print(f"模型文件不存在: {tree_path} 或 {agent_dir}")
+    if not os.path.exists(tree_path):
+        print(f"错误: 决策树模型文件不存在: {tree_path}")
         return
+    if not os.path.exists(agent_dir):
+         print(f"错误: Agents 目录不存在: {agent_dir}")
+         return
     
     print(f"加载决策树模型: {tree_path}")
     soft_tree = IntrinsicSoftTree(
         input_dim=len(env.config['states']),
         num_classes=args.num_classes,
         depth=args.tree_depth,
-        temperature=args.temperature
+        # temperature=args.temperature
     )
     soft_tree.load(tree_path)
+    if not soft_tree._is_fitted:
+        print("错误: 加载的决策树模型未训练或加载失败。")
+        return
     
-    if args.model == 'ppo' or args.model == 'intrinsic':  # 默认使用PPO
-        import agents.PPO as PPO
-        agent_class = PPO.PPO
-        agent_params = {
-            'state_dim': len(env.config['states']),
-            'action_dim': len(env.config['action_assets']),
-            'actornet_layer_A': 3,
-            'actornet_A': [{'num': 30}, {'num': 30}, {'num': 30}],
-            'bound_low': 0,
-            'bound_high': 1,
-            'evalnet_layer_V': 3,
-            'evalnet_V': [{'num': 30}, {'num': 30}, {'num': 30}],
-        }
-    else:  # DQN
-        import agents.DQN as DQN
-        agent_class = DQN.DQN
-        agent_params = {
-            'state_dim': len(env.config['states']),
-            'action_dim': 2**len(env.config['action_assets']),
-            'evalnet_layer_A': 3,
-            'evalnet_A': [{'num': 30}, {'num': 30}, {'num': 30}],
-            'evalnet_layer_V': 3,
-            'evalnet_V': [{'num': 30}, {'num': 30}, {'num': 30}],
-        }
-    
-    print(f"加载agent模型: {agent_dir}")
-    agent_manager = SpecializedAgentManager(
-        env=env,
-        num_classes=args.num_classes,
-        agent_class=agent_class,
-        base_params=agent_params
-    )
-    agent_manager.load_models(agent_dir)
+    print(f"从: {agent_dir} 加载 Agent Manager 和 Agents。")
+    agent_manager = SpecializedAgentManager.load_manager(agent_dir, env)
+
+    if agent_manager is None:
+        print("错误: 加载 Agent Manager 失败。")
+        return
+    if agent_manager.num_classes != args.num_classes:
+        print(f"警告: 加载的 Agent Manager 类别数 ({agent_manager.num_classes}) 与决策树 ({args.num_classes}) 不符。")
+        return
+    print(f"Agent Manager 加载成功，Agent 类型: {agent_manager.agent_class.__name__}")
     
     # 创建解释器
     explainer = IntrinsicExplainer(
         soft_tree=soft_tree, 
         env_config=env.config,
-        state_names=[f"特征_{i}" for i in range(len(env.config['states']))]
+        state_names=[f"Feature_{i}" for i in range(len(env.config['states']))]
     )
     
     results = {
@@ -124,295 +121,196 @@ def evaluate_intrinsic(args):
         'steps': [],
         'class_distribution': np.zeros(args.num_classes)
     }
+    all_episodes_history = [] # 存储每个 episode 的详细历史
+    num_actions_expected = len(env.config["action_assets"])
     
     for i, rain in enumerate(test_data):
         print(f"评估样本 {i+1}/{len(test_data)}...")
-        
+
         s = env.reset(rain)
         done = False
         episode_reward = 0
-        episode_flooding = 0
-        episode_cso = 0
+        episode_flooding_total = 0 # 记录当前 episode 的最终累积值
+        episode_cso_total = 0      # 记录当前 episode 的最终累积值
         step_count = 0
-        
-        # 收集解释和状态
+
         explanations = []
-        states = []
-        actions = []
-        class_ids = []
-        
+        episode_history = {'states': [], 'embeddings': [], 'class_ids': [], 'actions': [], 'logps': [], 'rewards': [], 'floodings': [], 'csos': []}
+
         while not done:
             embedding = soft_tree.generate_embedding(s)
             class_id = np.argmax(embedding)
             results['class_distribution'][class_id] += 1
 
-            _, action = agent_manager.choose_action(s, embedding, train_mode=False)
+            result, _ = agent_manager.choose_action(s, embedding, train_mode=False)
 
-            s_next, reward, flooding, cso, done = env.step(action)
+            action_for_env = None
+            action_for_history = None
+            logp_for_history = None
+            agent = agent_manager.agents[class_id]
 
-            explanation = explainer.generate_explanation(s, embedding, action, class_id)
+            # --- PPO ---
+            if hasattr(agent, 'calculate_logp') and isinstance(result, tuple) and len(result) == 2:
+                logp_action_np, action_np = result
+                action_for_env = action_np.tolist()
+                action_for_history = action_np
+                logp_for_history = logp_action_np
+                if len(action_for_env) != num_actions_expected: action_for_env = [0] * num_actions_expected; action_for_history = np.array(action_for_env)
+
+            # --- DQN ---
+            elif isinstance(result, (int, np.integer)):
+                action_index = result
+                action_for_history = action_index
+                if hasattr(agent, 'action_table') and agent.action_table is not None:
+                    action_table = agent.action_table
+                    if action_index < len(action_table): action_for_env = action_table[action_index, :].tolist()
+                    else: action_for_env = [int(bit) for bit in format(action_index, f'0{num_actions_expected}b')]
+                else: action_for_env = [int(bit) for bit in format(action_index, f'0{num_actions_expected}b')]
+                if not isinstance(action_for_env, list): action_for_env = [0] * num_actions_expected
+                if len(action_for_env) != num_actions_expected: action_for_env = [0] * num_actions_expected
+
+            else:
+                action_for_env = [0] * num_actions_expected
+                action_for_history = np.array(action_for_env); logp_for_history = -np.inf
+
+            if action_for_env is not None:
+                s_next, reward, current_total_flooding, current_total_cso, done = env.step(action_for_env)
+            else: raise ValueError("错误 (评估): 未能确定环境动作 action_for_env")
+
+            # --- 生成解释和记录历史 ---
+            explanation = explainer.generate_explanation(s, embedding, action_for_env, class_id)
             explanations.append(explanation)
 
-            states.append(s)
-            actions.append(action)
-            class_ids.append(class_id)
-            
+            episode_history['states'].append(s)
+            episode_history['embeddings'].append(embedding)
+            episode_history['class_ids'].append(class_id)
+            episode_history['actions'].append(action_for_history)
+            episode_history['logps'].append(logp_for_history)
+            episode_history['rewards'].append(reward)
+            episode_history['floodings'].append(current_total_flooding) # 记录累积值
+            episode_history['csos'].append(current_total_cso)      # 记录累积值
+
             episode_reward += reward
-            episode_flooding += flooding
-            episode_cso += cso
+            episode_flooding_total = current_total_flooding # 更新最终累积值
+            episode_cso_total = current_total_cso      # 更新最终累积值
             step_count += 1
-            
             s = s_next
-        
+
+        # --- Episode 结束处理 ---
         results['rewards'].append(episode_reward)
-        results['flooding'].append(episode_flooding)
-        results['cso'].append(episode_cso)
+        results['flooding'].append(episode_flooding_total) # 记录最终的累积洪水
+        results['cso'].append(episode_cso_total)      # 记录最终的累积 CSO
         results['steps'].append(step_count)
-        
+        all_episodes_history.append(episode_history) # 保存当前 episode 的详细历史
+
+        # 保存解释
         explanation_path = os.path.join(output_dir, f"explanations_sample_{i}.txt")
-        with open(explanation_path, 'w') as f:
-            for j, exp in enumerate(explanations):
-                f.write(f"Step {j}:\n")
-                for key, value in exp.items():
-                    if key != 'pump_status':
-                        f.write(f"  {key}: {value}\n")
-                    else:
-                        f.write(f"  {key}:\n")
-                        for pump in value:
-                            f.write(f"    {pump}\n")
-                f.write("\n")
-        
-        history = {
-            'states': states,
-            'actions': actions,
-            'class_ids': class_ids,
-            'reward': episode_reward,
-            'flooding': episode_flooding,
-            'cso': episode_cso
-        }
-        np.save(os.path.join(output_dir, f"history_sample_{i}.npy"), history)
-        
-        plt.figure(figsize=(15, 10))
-        
-        plt.subplot(3, 1, 1)
-        states_array = np.array(states)
-        for j in range(min(5, states_array.shape[1])):  # 只显示前5个状态变量
-            plt.plot(states_array[:, j], label=f'State {j}')
-        plt.title(f'State Variables (sample {i})')
-        plt.legend()
-        plt.grid(True)
-        
-        plt.subplot(3, 1, 2)
-        plt.plot(class_ids)
-        plt.title(f'Scene Classification (sample {i})')
-        plt.yticks(range(args.num_classes))
-        plt.grid(True)
-        
-        plt.subplot(3, 1, 3)
-        actions_array = np.array(actions)
-        if len(actions_array.shape) > 1:
-            for j in range(min(7, actions_array.shape[1])):  # 最多显示7个泵
-                plt.plot(actions_array[:, j], label=f'Pump {j}')
-        else:
-            plt.plot(actions_array, label='Action Index')
-        plt.title(f'Pump Control (sample {i})')
-        plt.legend()
-        plt.grid(True)
-        
+        try:
+            with open(explanation_path, 'w', encoding='utf-8') as f:
+                for j, exp in enumerate(explanations):
+                    f.write(f"Step {j}:\n")
+                    f.write(f"  Timestamp: {exp.get('timestamp', 'N/A')}\n")
+                    f.write(f"  场景: {exp.get('scene', 'N/A')}\n")
+                    path_str = " -> ".join(map(str, exp.get('decision_path', []))) if exp.get('decision_path') else "N/A"
+                    f.write(f"  决策路径: {path_str}\n")
+                    f.write(f"  理由: {exp.get('reason', 'N/A')}\n")
+                    f.write(f"  预期后果: {exp.get('consequence', 'N/A')}\n")
+                    pump_str = ", ".join(exp.get('pump_status', [])) if exp.get('pump_status') else "N/A"
+                    f.write(f"  泵状态: {pump_str}\n")
+                    f.write(f"  备选方案: {exp.get('alternatives', 'N/A')}\n\n")
+        except Exception as e:
+            print(f"错误: 无法写入解释文件 {explanation_path}: {e}")
+
+        # 保存单个样本的历史
+        # history_path = os.path.join(output_dir, f"history_sample_{i}.npy")
+        # try:
+        #     np.save(history_path, episode_history)
+        # except Exception as e:
+        #      print(f"错误: 无法保存样本历史文件 {history_path}: {e}")
+
+        # 绘制单个样本的控制过程图
+        # ... (复用 evaluate_system 中的绘图代码，但针对 episode_history) ...
+
+    # 计算平均性能指标
+    avg_reward = np.mean(results['rewards']) if results['rewards'] else 0
+    avg_flooding = np.mean(results['flooding']) if results['flooding'] else 0
+    avg_cso = np.mean(results['cso']) if results['cso'] else 0
+    avg_steps = np.mean(results['steps']) if results['steps'] else 0
+
+    # 计算场景分布频率
+    total_dist_steps = np.sum(results['class_distribution'])
+    class_dist_freq = results['class_distribution'] / max(1, total_dist_steps)
+
+    # 保存评估摘要
+    summary_file = os.path.join(output_dir, "evaluation_summary.txt")
+    try:
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            f.write(f"评估时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"模型路径: {args.model_path}\n")
+            f.write(f"Agent 类型: {args.agent_type.upper()}\n")
+            f.write(f"测试样本数: {len(test_data)}\n\n")
+            f.write(f"--- 平均性能指标 ---\n")
+            f.write(f"平均每 Episode 奖励: {avg_reward:.4f}\n")
+            f.write(f"平均每 Episode 最终洪水总量: {avg_flooding:.4f}\n")
+            f.write(f"平均每 Episode 最终 CSO 总量: {avg_cso:.4f}\n")
+            f.write(f"平均每 Episode 步数: {avg_steps:.2f}\n\n")
+            f.write("--- 场景分布频率 (基于总步数) ---\n")
+            for i in range(len(class_dist_freq)):
+                f.write(f"  场景 {i}: {class_dist_freq[i]*100:.2f}%\n")
+        print(f"评估摘要已保存到 {summary_file}")
+    except Exception as e:
+         print(f"错误: 无法写入评估摘要文件 {summary_file}: {e}")
+
+    # 保存整体评估结果 每个 episode 的指标
+    results_file = os.path.join(output_dir, "evaluation_results.npy")
+    try:
+        np.save(results_file, results)
+        print(f"详细评估结果已保存到 {results_file}")
+    except Exception as e:
+        print(f"错误: 无法保存详细评估结果文件 {results_file}: {e}")
+
+    try:
+        plt.figure(figsize=(12, 10))
+
+        # 绘制每个 Episode 的性能指标
+        plt.subplot(2, 1, 1)
+        bar_width = 0.25
+        index = np.arange(len(test_data))
+        plt.bar(index - bar_width, results['rewards'], bar_width, label=f'Reward (Avg: {avg_reward:.2f})')
+        # 洪水和 CSO 量级差异大，用次坐标轴/分开绘图
+        # plt.bar(index, results['flooding'], bar_width, label=f'Flooding (Avg: {avg_flooding:.2f})')
+        # plt.bar(index + bar_width, results['cso'], bar_width, label=f'CSO (Avg: {avg_cso:.2f})')
+        plt.ylabel('Reward')
+        plt.twinx()
+        plt.plot(index, results['flooding'], label=f'Flooding (Avg: {avg_flooding:.2f})', color='orange', marker='o')
+        plt.plot(index, results['cso'], label=f'CSO (Avg: {avg_cso:.2f})', color='green', marker='s')
+        plt.ylabel('Total Volume')
+        plt.title('Performance Metrics per Test Episode')
+        plt.xlabel('Test Sample Index')
+        plt.xticks(index)
+        plt.legend(loc='upper left')
+        plt.grid(True, axis='x')
+
+        # 绘制场景分布频率
+        plt.subplot(2, 1, 2)
+        plt.bar(range(args.num_classes), class_dist_freq * 100)
+        plt.title('Overall Scene Distribution Frequency')
+        plt.xlabel('Scene Class ID')
+        plt.ylabel('Frequency (%)')
+        plt.xticks(range(args.num_classes))
+        plt.grid(True, axis='y')
+
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, f"control_process_sample_{i}.png"))
+        summary_plot_file = os.path.join(output_dir, "evaluation_summary.png")
+        plt.savefig(summary_plot_file)
         plt.close()
-    
-    avg_reward = np.mean(results['rewards'])
-    avg_flooding = np.mean(results['flooding'])
-    avg_cso = np.mean(results['cso'])
-    avg_steps = np.mean(results['steps'])
-    
-    class_dist = results['class_distribution'] / np.sum(results['class_distribution'])
-    
-    with open(os.path.join(output_dir, "evaluation_summary.txt"), 'w') as f:
-        f.write(f"评估时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"模型路径: {args.model_path}\n")
-        f.write(f"测试样本数: {len(test_data)}\n")
-        f.write(f"平均奖励: {avg_reward:.4f}\n")
-        f.write(f"平均洪水: {avg_flooding:.4f}\n")
-        f.write(f"平均CSO: {avg_cso:.4f}\n")
-        f.write(f"平均步数: {avg_steps:.2f}\n\n")
-        f.write("场景分布:\n")
-        for i in range(len(class_dist)):
-            f.write(f"  场景 {i}: {class_dist[i]:.4f}\n")
-    
-    plt.figure(figsize=(15, 10))
-    
-    # 绘制奖励、洪水和CSO
-    plt.subplot(2, 1, 1)
-    plt.bar(range(len(test_data)), results['rewards'], label='Reward')
-    plt.bar(range(len(test_data)), results['flooding'], label='Flooding')
-    plt.bar(range(len(test_data)), results['cso'], label='CSO')
-    plt.title(f'Performance Metrics (Avg Reward: {avg_reward:.4f}, Flooding: {avg_flooding:.4f}, CSO: {avg_cso:.4f})')
-    plt.xlabel('Sample Index')
-    plt.ylabel('Value')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 1, 2)
-    plt.bar(range(len(class_dist)), class_dist)
-    plt.title('Scene Distribution')
-    plt.xlabel('Scene ID')
-    plt.ylabel('Frequency')
-    plt.xticks(range(len(class_dist)))
-    plt.grid(True)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "evaluation_summary.png"))
-    plt.close()
-    
-    print(f"评估完成，结果保存在 {output_dir}")
+        print(f"评估摘要图表已保存到 {summary_plot_file}")
+
+    except Exception as e:
+        print(f"错误: 绘制评估摘要图表失败: {e}")
+        plt.close()
+
+    print(f"\n--- 评估完成 ---")
     print(f"平均奖励: {avg_reward:.4f}")
     print(f"平均洪水: {avg_flooding:.4f}")
     print(f"平均CSO: {avg_cso:.4f}")
-
-
-# def evaluate_dqn(args):
-#     """评估DQN模型"""
-#     from interpretability.tree_surrogate import TreeSurrogateModel
-#     from interpretability.sensitivity import SensitivityAnalysis
-#     from interpretability.conditional_prob import ConditionalProbabilityAnalysis
-#     from interpretability.explainer import Explainer
-#     import agents.DQN as DQN
-    
-#     # 创建输出目录
-#     output_dir = os.path.join(
-#         args.output_dir,
-#         f"evaluate_dqn_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-#     )
-#     os.makedirs(output_dir, exist_ok=True)
-    
-#     # 设置环境
-#     env = setup_environment(args.env_path)
-    
-#     # 加载降雨数据
-#     rainfall_data = load_rainfall_data(args.rain_path)
-#     if rainfall_data is None:
-#         print("无法加载降雨数据，退出")
-#         return
-    
-#     # 限制测试样本数量
-#     test_data = rainfall_data[:args.num_test]
-    
-#     # 加载DQN模型
-#     agent_params = {
-#         'state_dim': len(env.config['states']),
-#         'action_dim': 2**len(env.config['action_assets']),
-#         'evalnet_layer_A': 3,
-#         'evalnet_A': [{'num': 30}, {'num': 30}, {'num': 30}],
-#         'evalnet_layer_V': 3,
-#         'evalnet_V': [{'num': 30}, {'num': 30}, {'num': 30}],
-#         'targetnet_layer_A': 3,
-#         'targetnet_A': [{'num': 30}, {'num': 30}, {'num': 30}],
-#         'targetnet_layer_V': 3,
-#         'targetnet_V': [{'num': 30}, {'num': 30}, {'num': 30}],
-#         'gamma': 0.3,
-#         'epsilon': 0.0,  # 评估时不使用探索
-#     }
-    
-#     agent = DQN.DQN(agent_params, env)
-    
-#     if args.model_path:
-#         try:
-#             agent.load_model(args.model_path)
-#             print(f"已加载模型: {args.model_path}")
-#         except Exception as e:
-#             print(f"加载模型出错: {e}")
-#             return
-    
-#     # 创建状态变量名称列表
-#     state_names = []
-#     for item in env.config['states']:
-#         if len(item) >= 2:
-#             if item[1] == 'depthN':
-#                 state_names.append(f"{item[0]}水位")
-#             elif item[1] == 'flow':
-#                 state_names.append(f"{item[0]}流量")
-#             elif item[1] == 'inflow':
-#                 state_names.append(f"{item[0]}入流")
-#             else:
-#                 state_names.append(f"降雨强度")
-#         else:
-#             state_names.append(f"状态_{len(state_names)}")
-    
-#     # 收集数据
-#     dataset = []
-#     results = {
-#         'rewards': [],
-#         'flooding': [],
-#         'cso': [],
-#         'steps': []
-#     }
-    
-#     # 评估每个测试样本
-#     for i, rain in enumerate(test_data):
-#         print(f"评估样本 {i+1}/{len(test_data)}...")
-        
-#         # 模拟控制过程
-#         s = env.reset(rain)
-#         done = False
-#         episode_reward = 0
-#         episode_flooding = 0
-#         episode_cso = 0
-#         step_count = 0
-        
-#         # 收集状态和动作
-#         states = []
-#         actions = []
-#         rewards = []
-#         floodings = []
-#         csos = []
-        
-#         while not done:
-#             # 选择动作
-#             a = agent.choose_action(s, False)
-            
-#             # 获取泵状态
-#             if isinstance(a, (int, np.integer)):
-#                 action = agent.action_table[a, :].tolist()
-#             else:
-#                 action = a
-            
-#             # 执行动作
-#             s_next, reward, flooding, cso, done = env.step(action)
-            
-#             # 记录数据
-#             states.append(s)
-#             actions.append(a)  # 保存动作索引
-#             rewards.append(reward)
-#             floodings.append(flooding)
-#             csos.append(cso)
-            
-#             # 更新统计信息
-#             episode_reward += reward
-#             episode_flooding += flooding
-#             episode_cso += cso
-#             step_count += 1
-            
-#             # 为后解释收集数据
-#             dataset.append((s, a, flooding + cso))
-            
-#             # 进入下一状态
-#             s = s_next
-        
-#         # 保存结果
-#         results['rewards'].append(episode_reward)
-#         results['flooding'].append(episode_flooding)
-#         results['cso'].append(episode_cso)
-#         results['steps'].append(step_count)
-        
-#         # 保存控制历史
-#         history = {
-#             'states': states,
-#             'actions': actions,
-#             'rewards': rewards,
-#             'floodings': floodings,
-#             'csos': csos
-#         }
-#         np.save(os.path.join(output_dir, f"history_sample_{i}.n

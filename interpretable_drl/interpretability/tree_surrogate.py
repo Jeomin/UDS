@@ -106,7 +106,7 @@ class TreeSurrogateModel:
         tree = self.model.tree_
         
         # 特征名称
-        feature_names = self.state_names if self.state_names else [f"特征_{i}" for i in range(tree.n_features)]
+        feature_names = self.state_names if self.state_names else [f"Feature_{i}" for i in range(tree.n_features)]
         
         # 类别名称
         if hasattr(self, 'label_encoder') and self.label_encoder.classes_.size > 0:
@@ -136,7 +136,7 @@ class TreeSurrogateModel:
             if feature < len(feature_names):
                 feature_name = feature_names[feature]
             else:
-                feature_name = f"特征_{feature}"
+                feature_name = f"Feature_{feature}"
                 
             # 左分支规则（<= threshold）
             left_prefix = prefix
@@ -176,7 +176,7 @@ class TreeSurrogateModel:
         
         # 使用提供的特征名称或默认名称
         if feature_names is None:
-            feature_names = self.state_names if self.state_names else [f"特征_{i}" for i in range(self.model.n_features_in_)]
+            feature_names = self.state_names if self.state_names else [f"Feature_{i}" for i in range(self.model.n_features_in_)]
             
         # 使用提供的类别名称或编码器的类别
         if class_names is None and hasattr(self, 'label_encoder') and self.label_encoder.classes_.size > 0:
@@ -261,14 +261,14 @@ class TreeSurrogateModel:
         importance = {}
         
         # 特征名称
-        feature_names = self.state_names if self.state_names else [f"特征_{i}" for i in range(self.model.n_features_in_)]
+        feature_names = self.state_names if self.state_names else [f"Feature_{i}" for i in range(self.model.n_features_in_)]
         
         # 特征重要性
         for i, imp in enumerate(self.model.feature_importances_):
             if i < len(feature_names):
                 importance[feature_names[i]] = imp
             else:
-                importance[f"特征_{i}"] = imp
+                importance[f"Feature_{i}"] = imp
                 
         return importance
     

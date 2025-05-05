@@ -113,7 +113,7 @@ def setup_environment(env_path):
     return env
 
 
-def pretrain_decision_tree(env, rainfall_data, num_classes, output_dir):
+def pretrain_decision_tree(env, rainfall_data, num_classes, output_dir, tree_depth=4):
     """
     预训练软决策树，将状态空间分类为不同场景
     
@@ -127,33 +127,84 @@ def pretrain_decision_tree(env, rainfall_data, num_classes, output_dir):
         soft_tree: 训练后的软决策树
         kmeans: KMeans聚类模型
     """
-    # 收集状态和奖励数据
+    # # 收集状态和奖励数据
+    # states = []
+    # rewards = []
+    
+    # for rain in rainfall_data[:10]:  # TODO 一点点数据？这里预训练写的太蠢了
+    #     s = env.reset(rain)
+    #     done = False
+        
+    #     while not done:
+    #         # 随机动作或使用启发式规则 为什么要这样构建数据，直接拿降雨当前状态可以吗
+    #         action = [np.random.randint(2) for _ in range(len(env.config['action_assets']))]
+    #         s_next, reward, flooding, cso, done = env.step(action)
+            
+    #         # 记录状态和奖励
+    #         states.append(s)
+    #         rewards.append([reward, flooding, cso])  # 使用多维奖励
+            
+    #         s = s_next
+    
+    # # 使用聚类算法划分场景，为决策树训练打标真值
+    # print("使用KMeans聚类划分场景...")
+    
+    # # 根据奖励、状态或两者结合进行聚类
+    # X = np.hstack([np.array(states), np.array(rewards)])
+    
+    # kmeans = KMeans(n_clusters=num_classes)
+    # labels = kmeans.fit_predict(X)
+    print("预训练决策树 (使用 scikit-learn)...")
+
+    # --- 数据收集 ---
     states = []
     rewards = []
-    
-    for rain in rainfall_data[:10]:  # TODO 一点点数据？这里预训练写的太蠢了
+    print("收集预训练数据...")
+    # TODO 考虑增加样本量或使用更好的探索策略
+    num_pretrain_samples = min(len(rainfall_data), 20) #目前使用前20降雨样本
+    for rain_idx, rain in enumerate(rainfall_data[:num_pretrain_samples]):
+        print(f"  处理降雨样本 {rain_idx+1}/{num_pretrain_samples}...")
         s = env.reset(rain)
         done = False
-        
-        while not done:
-            # 随机动作或使用启发式规则 为什么要这样构建数据，直接拿降雨当前状态可以吗
+        steps = 0
+        max_steps = 500
+        while not done and steps < max_steps:
+            # 使用随机动作
             action = [np.random.randint(2) for _ in range(len(env.config['action_assets']))]
-            s_next, reward, flooding, cso, done = env.step(action)
-            
-            # 记录状态和奖励
-            states.append(s)
-            rewards.append([reward, flooding, cso])  # 使用多维奖励
-            
-            s = s_next
-    
-    # 使用聚类算法划分场景，为决策树训练打标真值
-    print("使用KMeans聚类划分场景...")
-    
-    # 根据奖励、状态或两者结合进行聚类
-    X = np.hstack([np.array(states), np.array(rewards)])
-    
-    kmeans = KMeans(n_clusters=num_classes)
-    labels = kmeans.fit_predict(X)
+            try:
+                 s_next, reward, flooding, cso, done = env.step(action)
+                 states.append(s)
+                 rewards.append([reward, flooding, cso])
+                 s = s_next
+                 steps += 1
+            except Exception as e:
+                 print(f"错误: 在预训练数据收集中 env.step 出错: {e}")
+                 done = True # 终止当前 episode
+
+    if not states:
+         print("错误: 未能收集到任何预训练数据！")
+         return None, None
+
+    states_np = np.array(states)
+    rewards_np = np.array(rewards)
+    print(f"数据收集完成，共 {len(states_np)} 个时间步。")
+
+    # --- KMeans 聚类 ---
+    print("使用 KMeans 聚类划分场景...")
+    # 可以只用状态聚类
+    # X = states_np
+    X = np.hstack([states_np, rewards_np])
+    if X.shape[0] < num_classes:
+        print(f"警告: 数据点 ({X.shape[0]}) 少于类别数 ({num_classes})，无法进行有效聚类。")
+        # 可以选择减少 num_classes 或返回错误
+        return None, None
+
+    kmeans = KMeans(n_clusters=num_classes, random_state=42, n_init=10) # 显式设置 n_init
+    try:
+        labels = kmeans.fit_predict(X)
+    except Exception as e:
+        print(f"错误: KMeans 聚类失败: {e}")
+        return None, None
     
     # 分析每个类别的特征
     for i in range(num_classes):
@@ -179,69 +230,99 @@ def pretrain_decision_tree(env, rainfall_data, num_classes, output_dir):
                 
                 print(f"  特征 {j}: 均值={feature_mean:.4f}, 范围=[{feature_min:.4f}, {feature_max:.4f}]")
     
-    # 训练软决策树预测场景
-    print("训练软决策树预测场景...")
+    # # 训练软决策树预测场景
+    # print("训练软决策树预测场景...")
     
-    # 将标签转换为独热编码
-    one_hot_labels = tf.keras.utils.to_categorical(labels, num_classes=num_classes)
+    # # 将标签转换为独热编码
+    # one_hot_labels = tf.keras.utils.to_categorical(labels, num_classes=num_classes)
     
-    # 创建软决策树
+    # # 创建软决策树
+    # soft_tree = IntrinsicSoftTree(
+    #     input_dim=len(env.config['states']),
+    #     num_classes=num_classes,
+    #     depth=4,
+    #     temperature=1.0
+    # )
+    
+    # # 训练模型
+    # soft_tree.model.compile(
+    #     optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    #     loss='categorical_crossentropy',
+    #     metrics=['accuracy']
+    # )
+    
+    # history = soft_tree.model.fit(
+    #     np.array(states), one_hot_labels,
+    #     epochs=20,
+    #     batch_size=32,
+    #     validation_split=0.2,
+    #     verbose=1
+    # )
+    
+    # # 保存聚类结果和训练历史
+    # np.save(os.path.join(output_dir, 'cluster_labels.npy'), labels)
+    # np.save(os.path.join(output_dir, 'cluster_centers.npy'), kmeans.cluster_centers_)
+    
+    # # 保存模型
+    # soft_tree.save(os.path.join(output_dir, 'pretrained_tree.pkl'))
+    
+    # # 可视化训练过程
+    # plt.figure(figsize=(12, 5))
+    # plt.subplot(1, 2, 1)
+    # plt.plot(history.history['loss'], label='Training Loss')
+    # plt.plot(history.history['val_loss'], label='Validation Loss')
+    # plt.title('Loss During Pretraining')
+    # plt.xlabel('Epoch')
+    # plt.ylabel('Loss')
+    # plt.legend()
+    
+    # plt.subplot(1, 2, 2)
+    # plt.plot(history.history['accuracy'], label='Training Accuracy')
+    # plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+    # plt.title('Accuracy During Pretraining')
+    # plt.xlabel('Epoch')
+    # plt.ylabel('Accuracy')
+    # plt.legend()
+    
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(output_dir, 'tree_pretraining.png'))
+
+    print("训练 scikit-learn 决策树预测场景...")
+    # 创建 IntrinsicSoftTree 实例 (scikit-learn hard版本)
     soft_tree = IntrinsicSoftTree(
-        input_dim=len(env.config['states']),
+        input_dim=states_np.shape[1], # 特征维度
         num_classes=num_classes,
-        depth=4,
-        temperature=1.0
+        depth=tree_depth
     )
-    
-    # 训练模型
-    soft_tree.model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-        loss='categorical_crossentropy',
-        metrics=['accuracy']
-    )
-    
-    history = soft_tree.model.fit(
-        np.array(states), one_hot_labels,
-        epochs=20,
-        batch_size=32,
-        validation_split=0.2,
-        verbose=1
-    )
-    
-    # 保存聚类结果和训练历史
+
+    # 使用聚类标签训练决策树
+    soft_tree.fit(states_np, labels) # 调用新的 fit 方法
+
+    # 保存聚类结果和模型
     np.save(os.path.join(output_dir, 'cluster_labels.npy'), labels)
     np.save(os.path.join(output_dir, 'cluster_centers.npy'), kmeans.cluster_centers_)
-    
-    # 保存模型
-    soft_tree.save(os.path.join(output_dir, 'pretrained_tree.pkl'))
-    
-    # 可视化训练过程
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['loss'], label='Training Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Loss During Pretraining')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-    plt.title('Accuracy During Pretraining')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.legend()
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'tree_pretraining.png'))
+    soft_tree.save(os.path.join(output_dir, 'pretrained_tree.pkl')) # 保存 sklearn 模型
+
+    # 可视化决策树 (可选)
+    try:
+        import matplotlib.pyplot as plt
+        from sklearn.tree import plot_tree
+        plt.figure(figsize=(20, 10)) # 可能需要调整大小
+        feature_names=[f"Feature_{i}" for i in range(states_np.shape[1])]
+        class_names=[f"Scene_{i}" for i in range(num_classes)]
+        plot_tree(soft_tree.model, filled=True, feature_names=feature_names, class_names=class_names, max_depth=3, fontsize=10) # 限制绘图深度
+        plt.title("Pretrained Decision Tree (sklearn)")
+        plt.savefig(os.path.join(output_dir, 'tree_pretraining_sklearn.png'))
+        plt.close()
+    except Exception as e:
+        print(f"警告: 无法可视化决策树: {e}")
     
     return soft_tree, kmeans
 
 
 def initialize_specialized_agents(env, num_classes, agent_type='ppo'):
     """
-    为每个场景初始化专门化agent
+    为每个场景初始化agent
     
     Args:
         env: SWMM环境
@@ -417,7 +498,7 @@ def simulate_episode(env, rain, soft_tree, agent_manager, epoch, exploration_pha
     return episode_data
 
 
-def train_decision_tree_on_data(soft_tree, data):
+def train_decision_tree_on_data_mlp(soft_tree, data):
     """
     使用收集的数据更新决策树
     
@@ -447,6 +528,58 @@ def train_decision_tree_on_data(soft_tree, data):
     )
     
     return history.history['loss'][-1]
+
+def train_decision_tree_on_data(soft_tree, data, num_classes): # 需要 num_classes
+    """
+    使用收集的数据重新训练决策树 (scikit-learn 版本)
+
+    Args:
+        soft_tree: IntrinsicSoftTree 实例 (基于 scikit-learn)
+        data: 收集的数据列表 [(state, embedding, action_info, ...), ...]
+        num_classes: 类别数量
+
+    Returns:
+        accuracy: 训练后的树在当前数据上的准确率
+    """
+    states = []
+    class_ids = []
+
+    # 从数据中提取状态和由当前 soft_tree预测的类别 ID
+    # class_id 是基于当前soft_tree 的预测，用于重新训练树
+    for item in data:
+        if len(item) == 7: # 适配旧格式 (s, emb, act_info, r, cid, sn, d)
+            state, _, _, _, class_id, _, _ = item
+            states.append(state)
+            class_ids.append(class_id)
+        elif len(item) == 8: # 适配新格式 (s, emb, logp, act, r, cid, sn, d)
+             state, _, _, _, reward, class_id, next_state, done = item
+             states.append(state)
+             class_ids.append(class_id)
+        else:
+             # 跳过格式不符的数据
+             continue
+
+    if not states:
+        print("警告 (train_decision_tree_on_data): 没有有效数据用于训练决策树。")
+        return 0.0 # 返回一个默认值
+
+    states_np = np.array(states)
+    class_ids_np = np.array(class_ids)
+
+    # 使用新的数据重新训练决策树。完全重新训练，不是微调
+    soft_tree.fit(states_np, class_ids_np)
+
+    # 计算并返回在当前数据上的准确率
+    if soft_tree._is_fitted:
+         try:
+             accuracy = soft_tree.model.score(states_np, class_ids_np)
+             print(f"决策树重新训练完成。在当前数据上的准确率: {accuracy:.4f}")
+             return accuracy
+         except Exception as e:
+              print(f"错误: 计算决策树准确率时出错: {e}")
+              return 0.0
+    else:
+         return 0.0
 
 
 def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, epoch):
@@ -487,7 +620,7 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
     explainer = IntrinsicExplainer(
         soft_tree=soft_tree, 
         env_config=env.config,
-        state_names=[f"特征_{i}" for i in range(len(env.config['states']))]
+        state_names=[f"Feature_{i}" for i in range(len(env.config['states']))]
     )
 
     for i, rain in enumerate(rainfall_data):
@@ -614,14 +747,14 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
         plt.ylabel('Scene Class ID')
         plt.grid(True)
 
-        # PPO Log Prob 图 (如果存在)
-        valid_logps = [lp for lp in test_history['logps'] if lp is not None and lp != -np.inf]
-        if valid_logps:
-            plt.subplot(4, 1, 4)
-            plt.plot(valid_logps)
-            plt.title('PPO Action Log Probability per Step')
-            plt.ylabel('Log Probability')
-            plt.grid(True)
+        # # PPO action图
+        # valid_logps = [lp for lp in test_history['actions'] if lp is not None and lp != -np.inf]
+        # if valid_logps:
+        #     plt.subplot(4, 1, 4)
+        #     plt.plot(valid_logps)
+        #     plt.title('PPO Action per Step')
+        #     plt.ylabel('Log Probability')
+        #     plt.grid(True)
 
         plt.xlabel('Time Step')
         plt.tight_layout()
@@ -639,7 +772,7 @@ def evaluate_system(env, rainfall_data, soft_tree, agent_manager, output_dir, ep
 
 def train_intrinsic_interpretable(args):
     """
-    训练内生可解释系统的主函数
+    训练可解释系统的主函数
     
     Args:
         args: 命令行参数
@@ -660,13 +793,23 @@ def train_intrinsic_interpretable(args):
         print("无法加载降雨数据，退出")
         return
     
-    # 1. 预训练软决策树
+    # 1. 预训练软决策树 mlp
     print("预训练软决策树...")
+    # soft_tree, kmeans = pretrain_decision_tree(
+    #     env, rainfall_data, 
+    #     num_classes=args.num_classes,
+    #     output_dir=output_dir
+    # )
+    # skitlearn hard tree版本
     soft_tree, kmeans = pretrain_decision_tree(
-        env, rainfall_data, 
+        env, rainfall_data,
         num_classes=args.num_classes,
-        output_dir=output_dir
+        output_dir=output_dir,
+        tree_depth=args.tree_depth
     )
+    if soft_tree is None:
+        print("错误: 预训练决策树失败，退出。")
+        return
     
     # 2. 初始化专门化agent
     print("初始化专门化agent...")
@@ -702,9 +845,12 @@ def train_intrinsic_interpretable(args):
             data = simulate_episode(env, rain, soft_tree, agent_manager, epoch)
             all_data.extend(data)
         
-        # 训练决策树
-        tree_loss = train_decision_tree_on_data(soft_tree, all_data)
-        history['tree_loss'].append(tree_loss)
+        # 训练决策树 mlp
+        # tree_loss = train_decision_tree_on_data(soft_tree, all_data)
+        # history['tree_loss'].append(tree_loss)
+        tree_accuracy = train_decision_tree_on_data(soft_tree, all_data, args.num_classes)
+        # history['tree_loss'].append(tree_accuracy) # 记录准确率
+        history['tree_loss'].append(1.0 - tree_accuracy) # 记录错误率
         
         # 评估
         if (epoch + 1) % 5 == 0 or epoch == 0:
@@ -771,27 +917,46 @@ def train_intrinsic_interpretable(args):
                 if class_id in class_data:
                     class_data[class_id].append(item)
         
-        if args.joint_training:
-            # 联合训练
-            print("  联合训练决策树和agent...")
-            tree_loss = train_decision_tree_on_data(soft_tree, all_data)
-            losses = agent_manager.train_agents(class_data)
-            avg_loss = np.mean(list(losses.values())) if losses else 0
+        # if args.joint_training:
+        #     # 联合训练 mlp
+        #     print("  联合训练决策树和agent...")
+        #     tree_loss = train_decision_tree_on_data(soft_tree, all_data)
+        #     losses = agent_manager.train_agents(class_data)
+        #     avg_loss = np.mean(list(losses.values())) if losses else 0
             
-            history['tree_loss'].append(tree_loss)
+        #     history['tree_loss'].append(tree_loss)
+        #     history['agent_loss'].append(avg_loss)
+        # else:
+        #     # 交替训练
+        #     if epoch % 2 == 0:
+        #         print("  训练决策树...")
+        #         tree_loss = train_decision_tree_on_data(soft_tree, all_data)
+        #         history['tree_loss'].append(tree_loss)
+        #     else:
+        #         print("  训练专门化agent...")
+        #         losses = agent_manager.train_agents(class_data)
+        #         avg_loss = np.mean(list(losses.values())) if losses else 0
+        #         history['agent_loss'].append(avg_loss)
+        if args.joint_training:
+            # 联合训练 (交替进行)
+            print("  训练决策树...")
+            tree_accuracy = train_decision_tree_on_data(soft_tree, all_data, args.num_classes)
+            history['tree_loss'].append(1.0 - tree_accuracy)
+            print("  训练专门化 agent...")
+            losses = agent_manager.train_agents(class_data, batch_size=args.batch_size, ppo_epochs=4) # 假设 ppo_epochs=4
+            avg_loss = np.mean(list(losses.values())) if losses else 0
             history['agent_loss'].append(avg_loss)
         else:
             # 交替训练
             if epoch % 2 == 0:
                 print("  训练决策树...")
-                tree_loss = train_decision_tree_on_data(soft_tree, all_data)
-                history['tree_loss'].append(tree_loss)
+                tree_accuracy = train_decision_tree_on_data(soft_tree, all_data, args.num_classes)
+                history['tree_loss'].append(1.0 - tree_accuracy)
             else:
-                print("  训练专门化agent...")
-                losses = agent_manager.train_agents(class_data)
+                print("  训练专门化 agent...")
+                losses = agent_manager.train_agents(class_data, batch_size=args.batch_size, ppo_epochs=4)
                 avg_loss = np.mean(list(losses.values())) if losses else 0
                 history['agent_loss'].append(avg_loss)
-        
         # 评估
         if (epoch + 1) % 5 == 0 or epoch == total_epochs - 1:
             avg_reward, avg_flooding, avg_cso = evaluate_system(

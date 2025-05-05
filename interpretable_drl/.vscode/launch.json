@@ -8,11 +8,11 @@
             "program": "${workspaceFolder}/main.py",
             "args": [
                 "--mode", "intrinsic_train",
-                "--num-classes", "2",
-                "--tree-depth", "2",
+                "--num-classes", "4",
+                "--tree-depth", "4",
                 "--temperature", "1.0",
                 "--epochs", "10",
-                "--num-train", "5",
+                "--num-train", "10",
                 "--agent-type", "ppo"
             ],
             "console": "integratedTerminal",
@@ -36,5 +36,23 @@
                 "TF_CPP_MIN_LOG_LEVEL": "1"
             }
         },
+        {
+            "name": "evaluate",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "evaluate",
+                "--model-path", "${workspaceFolder}/output/intrinsic_interpretable_20250505_233950",
+                "--output-dir", "${workspaceFolder}/output/intrinsic_interpretable_20250505_233950",
+                "--num-test", "10",
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "TF_CPP_MIN_LOG_LEVEL": "1"
+            }
+        }
     ]
 }
